@@ -52,3 +52,9 @@ def test_openapi_documents_hazard_endpoint(client: TestClient) -> None:
         "limit",
     } <= parameter_names
     assert "422" in path["responses"]
+
+
+def test_root_redirects_to_docs(client: TestClient) -> None:
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "/docs"
