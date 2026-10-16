@@ -24,7 +24,7 @@ from adaptation_atlas_api.ports.tabular_reader import TabularReader
 logger = logging.getLogger(__name__)
 
 # Query parameters that control the response and are never dataset filters.
-CONTROL_PARAMETERS = {"format", "limit", "offset"}
+CONTROL_PARAMETERS = {"format", "limit", "offset", "filters"}
 
 
 class TabularDatasetService:
@@ -86,7 +86,7 @@ class TabularDatasetService:
     def build_query(
         self,
         dataset_id: str,
-        raw_filters: Mapping[str, str | None],
+        raw_filters: Mapping[str, str | list[str] | None],
         *,
         output_format: str = "json",
         limit: int | None = None,
@@ -128,7 +128,7 @@ class TabularDatasetService:
     def query(
         self,
         dataset_id: str,
-        raw_filters: Mapping[str, str | None],
+        raw_filters: Mapping[str, str | list[str] | None],
         *,
         output_format: str = "json",
         limit: int | None = None,

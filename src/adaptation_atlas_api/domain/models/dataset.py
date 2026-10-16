@@ -149,6 +149,8 @@ class FilterDefinition(BaseModel):
         allowed_values: Controlled vocabulary; ``None`` means any value is accepted.
         case_insensitive: Whether values are matched ignoring case and normalized to the
             canonical spelling from ``allowed_values``.
+        multiple: Whether the client may send several values (repeated parameter, comma
+            separated list or JSON array); they are combined with OR.
         default: Value applied when the client omits the filter.
         description: Human readable description shown in the API documentation.
         example: Example value shown in the API documentation.
@@ -162,6 +164,7 @@ class FilterDefinition(BaseModel):
     required: bool = False
     allowed_values: list[str] | None = None
     case_insensitive: bool = False
+    multiple: bool = True
     default: str | None = None
     description: str = ""
     example: str | None = None

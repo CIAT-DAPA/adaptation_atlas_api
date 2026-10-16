@@ -99,6 +99,25 @@ Error code `filter_not_applicable` (422) is returned when a registered filter ta
 column that does not exist in the files selected by the other filters (for example
 `severity` on the precipitation-change tables of `climate_hazard_change`).
 
+### Passing dataset filters
+
+Filters are dataset specific (see `GET /api/v1/datasets/{dataset_id}`) and can be sent in
+two equivalent ways, which may be combined:
+
+```bash
+# As a JSON object in the `filters` parameter (convenient from Swagger UI)
+curl -G "http://localhost:8000/api/v1/datasets/hazard_exposure/records" \
+     --data-urlencode 'filters={"country":"KEN","period":"historic","crop":"maize"}'
+
+# As ordinary query parameters (convenient from a browser, Python or R)
+curl "http://localhost:8000/api/v1/datasets/hazard_exposure/records?country=KEN&period=historic&crop=maize"
+```
+
+Several values of the same filter are combined with OR and can be given as a JSON array
+(`"crop":["maize","bean"]`), a repeated parameter (`crop=maize&crop=bean`) or a comma
+separated list (`crop=maize,bean`). A filter can opt out with `multiple: false` in its
+catalog definition.
+
 ### Example (HU-001, dataset `hazard_exposure`)
 
 ```bash

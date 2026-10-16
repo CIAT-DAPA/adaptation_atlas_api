@@ -49,12 +49,14 @@ def observed(catalog: YamlCatalogRepository) -> DatasetDefinition:
 # --------------------------------------------------------------------------- #
 def test_country_placeholder_is_rendered_in_file_name(phenology: DatasetDefinition) -> None:
     query = make_query(phenology, {"country": "ken"})
-    path = DuckDBTabularReader.build_relative_path(query)
+    [path] = DuckDBTabularReader.build_relative_paths(query)
     assert path.endswith("/level=adm1/KEN_seasonal-phenology.parquet")
     query = make_query(phenology, {"country": "eth", "variant": "plus_rain"})
-    assert DuckDBTabularReader.build_relative_path(query).endswith(
+    assert DuckDBTabularReader.build_relative_paths(query)[0].endswith(
         "/ETH_seasonal-phenology_plus-rain.parquet"
     )
+    query = make_query(phenology, {"country": "ken,eth"})
+    assert len(DuckDBTabularReader.build_relative_paths(query)) == 2
 
 
 def test_auto_fields_return_every_source_column(
@@ -116,8 +118,9 @@ def test_single_file_dataset_partition_filter(
     reader: DuckDBTabularReader, observed: DatasetDefinition
 ) -> None:
     query = make_query(observed, {"country": "KEN", "aggregation": "admin-periods"})
-    assert "processing=admin-periods/variable=adm0_obs.parquet" in (
-        DuckDBTabularReader.build_relative_path(query)
+    assert (
+        "processing=admin-periods/variable=adm0_obs.parquet"
+        in (DuckDBTabularReader.build_relative_paths(query)[0])
     )
     assert reader.query(query).total_count == 4
 
@@ -148,3 +151,12 @@ def test_dataset_detail_without_explicit_fields(client: TestClient) -> None:
     assert payload["fields"] == []
     assert payload["domain"] == "phenology"
     assert payload["available_partition_values"]["country"] == ["ETH", "KEN"]
+
+
+def test_two_countries_from_two_files(
+    reader: DuckDBTabularReader, phenology: DatasetDefinition
+) -> None:
+    result = reader.query(make_query(phenology, {"country": ["KEN", "ETH"]}))
+    assert result.source_files == 2
+    assert result.total_count == 12
+    assert result.applied_filters["country"] == ["KEN", "ETH"]

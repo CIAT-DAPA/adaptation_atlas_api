@@ -23,7 +23,7 @@ from adaptation_atlas_api.domain.models.dataset import (
     FilterDefinition,
     FilterSource,
 )
-from adaptation_atlas_api.domain.models.query import Predicate, ValidatedFilters
+from adaptation_atlas_api.domain.models.query import DerivedCondition, ValidatedFilters
 from adaptation_atlas_api.domain.validation.derived import resolve_derived_rule
 
 
@@ -77,9 +77,48 @@ def normalize_value(filter_definition: FilterDefinition, raw_value: str) -> str:
     return value
 
 
+RawValue = str | list[str] | None
+VALUE_SEPARATOR = ","
+
+
+def split_values(filter_definition: FilterDefinition, raw_value: str | list[str]) -> list[str]:
+    """Turn the raw value(s) of a filter into a de-duplicated list of non-empty strings.
+
+    Args:
+        filter_definition: Filter the values belong to.
+        raw_value: A single string (possibly comma separated) or a list of strings.
+
+    Returns:
+        The distinct values in order of appearance, surrounding whitespace removed.
+
+    Raises:
+        InvalidFilterValueError: If several values are given to a single-valued filter.
+    """
+    items = [raw_value] if isinstance(raw_value, str) else list(raw_value)
+    values: list[str] = []
+
+    # Expand comma separated entries and drop blanks while keeping the original order.
+    for item in items:
+        pieces = item.split(VALUE_SEPARATOR) if filter_definition.multiple else [item]
+        for piece in pieces:
+            cleaned = piece.strip()
+            # Blank pieces (``a,,b``) and repeated values are ignored.
+            if cleaned and cleaned not in values:
+                values.append(cleaned)
+
+    # Single-valued filters refuse lists outright.
+    if len(values) > 1 and not filter_definition.multiple:
+        raise InvalidFilterValueError(
+            f"Parameter '{filter_definition.name}' accepts a single value.",
+            parameter=filter_definition.name,
+            allowed_values=filter_definition.allowed_values,
+        )
+    return values
+
+
 def validate_filters(
     dataset: DatasetDefinition,
-    raw_filters: Mapping[str, str | None],
+    raw_filters: Mapping[str, RawValue],
     reserved_parameters: set[str] | None = None,
 ) -> ValidatedFilters:
     """Validate the filters supplied for ``dataset`` and group them by resolution strategy.
@@ -87,7 +126,8 @@ def validate_filters(
     Args:
         dataset: Definition the filters are validated against.
         raw_filters: Every query parameter received, including unknown ones, mapped to its
-            raw value (``None`` when the parameter was sent without a value).
+            raw value: a string (comma separated for several values), a list of strings,
+            or ``None`` when the parameter was sent without a value.
         reserved_parameters: Control parameters (``format``, ``limit``...) that are not
             dataset filters and must be ignored by the validator.
 
@@ -116,27 +156,24 @@ def validate_filters(
                 allowed_values=sorted(registered_names),
             )
 
-    partition_values: dict[str, str] = {}
-    column_filters: dict[str, str] = {}
-    derived_predicates: list[Predicate] = []
-    applied: dict[str, str] = {}
+    partition_values: dict[str, list[str]] = {}
+    column_filters: dict[str, list[str]] = {}
+    derived_conditions: list[DerivedCondition] = []
+    applied: dict[str, str | list[str]] = {}
     filter_names_by_column: dict[str, str] = {}
-    file_pattern_key = dataset.storage.default_file_pattern
+    file_pattern_keys = [dataset.storage.default_file_pattern]
 
-    # Resolve every registered filter: supplied value, default value or required check.
+    # Resolve every registered filter: supplied values, default value or required check.
     for filter_definition in dataset.filters:
         raw_value = raw_filters.get(filter_definition.name)
+        values = split_values(filter_definition, raw_value) if raw_value is not None else []
 
-        # Treat a parameter sent without a value exactly like an absent parameter.
-        if raw_value is not None and not raw_value.strip():
-            raw_value = None
-
-        # Fall back to the catalog default when the client did not send the filter.
-        if raw_value is None:
-            raw_value = filter_definition.default
+        # Fall back to the catalog default when the client sent nothing usable.
+        if not values and filter_definition.default is not None:
+            values = [filter_definition.default]
 
         # A required filter with neither a value nor a default stops the request.
-        if raw_value is None:
+        if not values:
             # Only required filters are mandatory; optional ones are simply skipped.
             if filter_definition.required:
                 raise MissingRequiredFilterError(
@@ -146,7 +183,7 @@ def validate_filters(
                 )
             continue
 
-        # Derived filters are validated by their own rule, which produces predicates.
+        # Derived filters are validated by their own rule, one alternative per value.
         if filter_definition.source is FilterSource.DERIVED:
             try:
                 rule = resolve_derived_rule(filter_definition.resolved_target)
@@ -155,20 +192,21 @@ def validate_filters(
                     f"Filter '{filter_definition.name}' references unknown derived rule "
                     f"'{filter_definition.resolved_target}'."
                 ) from error
-            derived_predicates.extend(rule(filter_definition.name, raw_value))
-            applied[filter_definition.name] = raw_value.strip()
+            alternatives = [rule(filter_definition.name, value) for value in values]
+            derived_conditions.append(DerivedCondition(filter_definition.name, alternatives))
+            applied[filter_definition.name] = values[0] if len(values) == 1 else values
             continue
 
-        canonical = normalize_value(filter_definition, raw_value)
-        applied[filter_definition.name] = canonical
+        canonical = [normalize_value(filter_definition, value) for value in values]
+        applied[filter_definition.name] = canonical[0] if len(canonical) == 1 else canonical
 
-        # Partition filters select a folder in the storage path.
+        # Partition filters select folders (or file name fragments) in the storage path.
         if filter_definition.source is FilterSource.PARTITION:
             partition_values[filter_definition.resolved_target] = canonical
         # File pattern filters select which files are read inside the leaf folder.
         elif filter_definition.source is FilterSource.FILE_PATTERN:
-            file_pattern_key = canonical
-        # Column filters become equality predicates inside the files.
+            file_pattern_keys = canonical
+        # Column filters become membership predicates inside the files.
         else:
             column_filters[filter_definition.resolved_target] = canonical
             filter_names_by_column[filter_definition.resolved_target] = filter_definition.name
@@ -176,8 +214,8 @@ def validate_filters(
     return ValidatedFilters(
         partition_values=partition_values,
         column_filters=column_filters,
-        derived_predicates=derived_predicates,
-        file_pattern_key=file_pattern_key,
+        derived_conditions=derived_conditions,
+        file_pattern_keys=file_pattern_keys,
         applied=applied,
         filter_names_by_column=filter_names_by_column,
     )

@@ -51,7 +51,7 @@ def test_openapi_documents_records_endpoint(client: TestClient) -> None:
     schema = client.get("/openapi.json").json()
     path = schema["paths"]["/api/v1/datasets/{dataset_id}/records"]["get"]
     parameter_names = {item["name"] for item in path["parameters"]}
-    assert {"dataset_id", "format", "limit", "offset", "<dataset filters>"} <= parameter_names
+    assert {"dataset_id", "filters", "format", "limit", "offset"} == parameter_names
     assert "422" in path["responses"]
     assert "/api/v1/hazard-exposure/{dataset_id}" not in schema["paths"]
 
@@ -60,3 +60,15 @@ def test_root_redirects_to_docs(client: TestClient) -> None:
     response = client.get("/", follow_redirects=False)
     assert response.status_code == 307
     assert response.headers["location"] == "/docs"
+
+
+def test_dataset_detail_includes_example_query(client: TestClient) -> None:
+    payload = client.get("/api/v1/datasets/hazard_exposure").json()
+    example = payload["example_query"]
+    assert example == "/api/v1/datasets/hazard_exposure/records?country=KEN&period=historic"
+    # The example must be a valid query against the API itself.
+    assert client.get(example).status_code == 200
+    assert payload["example_filters"] == {"country": "KEN", "period": "historic"}
+    change = client.get("/api/v1/datasets/climate_hazard_change").json()
+    assert change["example_query"].endswith("records?country=KEN&indicator=haz_freq_ensemble")
+    assert client.get(change["example_query"]).status_code == 200

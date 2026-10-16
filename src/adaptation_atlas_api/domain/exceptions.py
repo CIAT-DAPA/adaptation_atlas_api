@@ -59,6 +59,18 @@ class InvalidFilterValueError(DomainError):
     code = "invalid_filter_value"
 
 
+class InvalidFiltersJsonError(DomainError):
+    """The ``filters`` parameter is not a JSON object of scalar values."""
+
+    code = "invalid_filters_json"
+
+
+class ConflictingFilterError(DomainError):
+    """The same filter was sent in ``filters`` and as a query parameter with different values."""
+
+    code = "conflicting_filter"
+
+
 class FilterNotApplicableError(DomainError):
     """A registered filter targets a column absent from the files selected by the query."""
 

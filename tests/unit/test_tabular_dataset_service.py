@@ -56,7 +56,7 @@ def test_query_builds_validated_query_and_delegates(
         output_format="json",
     )
     assert fake_reader.last_query is not None
-    assert fake_reader.last_query.filters.column_filters["iso3"] == "KEN"
+    assert fake_reader.last_query.filters.column_filters["iso3"] == ["KEN"]
     assert fake_reader.last_query.limit == 10
     assert fake_reader.last_query.output_format is OutputFormat.JSON
     assert result.total_count == 0
@@ -68,8 +68,8 @@ def test_service_is_dataset_agnostic(
 ) -> None:
     service.query("phenology_seasonal_test", {"country": "eth", "variant": "plus_rain"})
     assert fake_reader.last_query is not None
-    assert fake_reader.last_query.filters.partition_values == {"country": "ETH"}
-    assert fake_reader.last_query.filters.file_pattern_key == "plus_rain"
+    assert fake_reader.last_query.filters.partition_values == {"country": ["ETH"]}
+    assert fake_reader.last_query.filters.file_pattern_keys == ["plus_rain"]
 
 
 def test_unsupported_format_is_rejected(service: TabularDatasetService) -> None:

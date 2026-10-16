@@ -107,7 +107,7 @@ def build_container(settings: Settings) -> Container:
         query_timeout_seconds=settings.query_timeout_seconds,
     )
 
-    catalog_service = CatalogService(catalog, partition_index)
+    catalog_service = CatalogService(catalog, partition_index, api_prefix=settings.api_prefix)
     tabular_service = TabularDatasetService(
         catalog,
         tabular_reader,
