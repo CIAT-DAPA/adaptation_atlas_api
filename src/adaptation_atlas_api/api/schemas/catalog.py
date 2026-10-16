@@ -85,6 +85,7 @@ class DatasetSummary(BaseModel):
         id: Public identifier.
         name: Human readable title.
         description: Longer description.
+        domain: Thematic domain (climate, exposure, impacts...).
         type: Dataset kind (tabular or raster).
         output_formats: Supported export formats.
     """
@@ -92,6 +93,7 @@ class DatasetSummary(BaseModel):
     id: str
     name: str
     description: str = ""
+    domain: str = ""
     type: str
     output_formats: list[str]
 
@@ -109,6 +111,7 @@ class DatasetSummary(BaseModel):
             id=dataset.id,
             name=dataset.name,
             description=dataset.description,
+            domain=dataset.domain,
             type=dataset.type.value,
             output_formats=list(dataset.output_formats),
         )
@@ -119,9 +122,12 @@ class DatasetDetail(DatasetSummary):
 
     Attributes:
         filters: Accepted query parameters with their vocabularies.
-        fields: Fields returned for every record.
+        fields: Fields returned for every record. Empty when the dataset returns every
+            source column as is.
         available_partition_values: Partition values found in storage (when discovery is on).
         available_combinations: Partition combinations found in storage.
+        example_query: Copy-ready records URL using the required filters.
+        example_filters: The required filters as a JSON object for the ``filters`` parameter.
         metadata: Extra metadata, including source metadata sidecars when enabled.
     """
 
@@ -129,6 +135,13 @@ class DatasetDetail(DatasetSummary):
     fields: list[FieldSchema] = Field(default_factory=list)
     available_partition_values: dict[str, list[str]] = Field(default_factory=dict)
     available_combinations: list[dict[str, str]] = Field(default_factory=list)
+    example_query: str = Field(
+        default="",
+        examples=["/api/v1/datasets/hazard_exposure/records?country=KEN&period=historic"],
+    )
+    example_filters: dict[str, str] = Field(
+        default_factory=dict, examples=[{"country": "KEN", "period": "historic"}]
+    )
     metadata: dict[str, object] = Field(default_factory=dict)
 
     @classmethod
@@ -146,11 +159,14 @@ class DatasetDetail(DatasetSummary):
             id=dataset.id,
             name=dataset.name,
             description=dataset.description,
+            domain=dataset.domain,
             type=dataset.type.value,
             output_formats=list(dataset.output_formats),
             filters=[FilterSchema.from_domain(item) for item in dataset.filters],
             fields=[FieldSchema.from_domain(item) for item in dataset.response_fields],
             available_partition_values=availability.available_partition_values,
             available_combinations=availability.available_combinations,
+            example_query=availability.example_query,
+            example_filters=availability.example_filters,
             metadata=dict(dataset.metadata),
         )

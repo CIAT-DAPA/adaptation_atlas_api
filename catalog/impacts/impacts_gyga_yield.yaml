@@ -1,0 +1,41 @@
+# GYGA rainfed yield potential and nutrient requirements per weather station, by crop.
+# One file per crop; the polygon geometry of each station zone is excluded from the
+# tabular response.
+id: impacts_gyga_yield
+name: GYGA rainfed yield potential by station zone
+domain: impacts
+description: >-
+  Rainfed yield (t/ha) and nitrogen, phosphorus and potassium requirements to reach 30, 50
+  and 70 percent of the yield potential for bean, cowpea, groundnut and soybean, per
+  GYGA weather station zone, with the administrative units and crop area of each zone.
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=impacts/type=production/source=gyga/region=ssa/processing=raw/{file}"
+  file_patterns:
+    default: "{crop}.parquet"
+  default_file_pattern: default
+  discover_partitions: true
+partitions:
+  - name: crop
+    description: Crop file.
+    allowed_values: [bean, cowpea, groundnut, soybean]
+filters:
+  - name: crop
+    source: partition
+    target: crop
+    required: true
+    description: Crop.
+    example: bean
+    allowed_values: [bean, cowpea, groundnut, soybean]
+  - name: country_name
+    source: column
+    target: admin0_name
+    description: Country name as spelled by GYGA (e.g. Kenya, Tanzania, Congo - Kinshasa).
+    example: Kenya
+  - name: admin1
+    source: column
+    target: admin1_name
+    description: First sub-national unit name.
+excluded_columns: [geometry, geometry_bbox]
+order_by: [admin0_name, admin1_name, admin2_name, station_id]

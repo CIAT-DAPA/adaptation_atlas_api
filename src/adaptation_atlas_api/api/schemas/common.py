@@ -26,7 +26,7 @@ class ResponseMetadata(BaseModel):
 
     Attributes:
         dataset_id: Public identifier of the dataset queried.
-        filters: Public filter name -> canonical value actually applied.
+        filters: Public filter name -> canonical value (or list of values) actually applied.
         total_count: Total matching records before pagination.
         returned_count: Records included in this page.
         limit: Page size applied.
@@ -36,7 +36,7 @@ class ResponseMetadata(BaseModel):
     """
 
     dataset_id: str
-    filters: dict[str, str]
+    filters: dict[str, str | list[str]]
     total_count: int
     returned_count: int
     limit: int

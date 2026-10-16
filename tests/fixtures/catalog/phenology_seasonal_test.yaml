@@ -1,0 +1,35 @@
+# Test dataset: one Parquet per country, with the country code embedded in the file name
+# and two file variants selected by a file pattern filter. No explicit response fields:
+# every source column is returned.
+id: phenology_seasonal_test
+name: Seasonal phenology (test)
+domain: phenology
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=phenology/type=sos_eos/source=glass_nvdi/region=africa/processing=raw/level=adm1/{file}"
+  file_patterns:
+    standard: "{country}_seasonal-phenology.parquet"
+    plus_rain: "{country}_seasonal-phenology_plus-rain.parquet"
+  default_file_pattern: standard
+  discover_partitions: true
+partitions:
+  - name: country
+    description: ISO3 country code embedded in the file name.
+    allowed_values: [KEN, ETH]
+filters:
+  - name: country
+    source: partition
+    target: country
+    required: true
+    case_insensitive: true
+    allowed_values: [KEN, ETH]
+  - name: variant
+    source: file_pattern
+    default: standard
+    allowed_values: [standard, plus_rain]
+  - name: season
+    source: column
+    target: season
+    allowed_values: ["1", "2"]
+order_by: [admin1_name, year, season]

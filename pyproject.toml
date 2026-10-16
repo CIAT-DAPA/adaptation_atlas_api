@@ -1,7 +1,7 @@
 [project]
 name = "adaptation-atlas-api"
 version = "0.1.0"
-description = "REST API exposing Adaptation Atlas climate, hazard and exposure datasets stored in AWS S3."
+description = "REST API exposing Adaptation Atlas climate, hazard and exposure datasets."
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 license = { text = "MIT" }

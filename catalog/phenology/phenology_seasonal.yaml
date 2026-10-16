@@ -1,0 +1,55 @@
+# Seasonal phenology (start, peak and end of season) derived from GLASS NDVI per pixel and
+# season since 2000, one file per country, with an optional variant that adds seasonal
+# rainfall and dry-spell statistics. Files are large (up to 160 MB per country): always
+# filter by country and prefer narrowing by admin1 or season flag.
+id: phenology_seasonal
+name: Seasonal phenology from GLASS NDVI
+domain: phenology
+description: >-
+  Per-pixel start, peak and end of growing seasons (TRS2, TRS5 and derivative methods),
+  greenup, maturity, senescence and dormancy dates, fit quality metrics and the first
+  sub-national unit, for every season since 2000 in 55 African countries. The plus_rain
+  variant adds seasonal rainfall totals and consecutive dry days.
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=phenology/type=sos_eos/source=glass_nvdi/region=africa/processing=raw/level=adm1/{file}"
+  file_patterns:
+    standard: "{country}_seasonal-phenology.parquet"
+    plus_rain: "{country}_seasonal-phenology_plus-rain.parquet"
+  default_file_pattern: standard
+  discover_partitions: true
+partitions:
+  - name: country
+    description: ISO3 country code embedded in the file name.
+    allowed_values: [AGO, BDI, BEN, BFA, BWA, CAF, CIV, CMR, COD, COG, COM, CPV, DJI, DZA, EGY, ERI, ESH, ETH, GAB, GHA, GIN, GMB, GNB, GNQ, KEN, LBR, LBY, LSO, MAR, MDG, MLI, MOZ, MRT, MUS, MWI, NAM, NER, NGA, RWA, SDN, SEN, SLE, SOM, SSD, STP, SWZ, SYC, TCD, TGO, TUN, TZA, UGA, ZAF, ZMB, ZWE]
+filters:
+  - name: country
+    source: partition
+    target: country
+    required: true
+    case_insensitive: true
+    description: ISO 3166-1 alpha-3 country code.
+    example: KEN
+    allowed_values: [AGO, BDI, BEN, BFA, BWA, CAF, CIV, CMR, COD, COG, COM, CPV, DJI, DZA, EGY, ERI, ESH, ETH, GAB, GHA, GIN, GMB, GNB, GNQ, KEN, LBR, LBY, LSO, MAR, MDG, MLI, MOZ, MRT, MUS, MWI, NAM, NER, NGA, RWA, SDN, SEN, SLE, SOM, SSD, STP, SWZ, SYC, TCD, TGO, TUN, TZA, UGA, ZAF, ZMB, ZWE]
+  - name: variant
+    source: file_pattern
+    default: standard
+    description: Phenology only, or phenology with seasonal rainfall statistics.
+    allowed_values: [standard, plus_rain]
+  - name: admin1
+    source: column
+    target: admin1_name
+    description: First sub-national unit name.
+    example: Nakuru
+  - name: method
+    source: column
+    target: meth
+    description: Phenology extraction method.
+    allowed_values: [Beck, Elmore, Zhang]
+  - name: season_flag
+    source: column
+    target: flag
+    description: Season identifier as year_number, e.g. 2020_1 for the first season of 2020.
+    example: "2020_1"
+order_by: [admin1_name, pixel, flag, meth]

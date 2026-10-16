@@ -1,0 +1,43 @@
+# ACLED conflict events 2017-2024 (global, point events). Geometry columns are excluded;
+# event location is available through the admin1/admin2/location text fields.
+id: socioeconomic_acled_conflicts
+name: Conflict events (ACLED 2017-2024)
+domain: socioeconomic
+description: >-
+  Individual political violence and demonstration events recorded by ACLED between 2017
+  and 2024 worldwide, with event and actor types, location names, fatalities and notes.
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=socioeconomic/type=security/source=acled/region=global/processing=raw/{file}"
+  file_patterns:
+    default: "variable=conflicts_2017-2024.parquet"
+  default_file_pattern: default
+filters:
+  - name: country_name
+    source: column
+    target: country
+    required: true
+    description: Country name as spelled by ACLED (e.g. Kenya, Democratic Republic of Congo).
+    example: Kenya
+  - name: year
+    source: column
+    target: year
+    description: Event year (2017-2025).
+    example: "2023"
+  - name: event_type
+    source: column
+    target: event_type
+    description: ACLED event type.
+    allowed_values: [Battles, Explosions/Remote violence, Protests, Riots, Violence against civilians]
+  - name: disorder_type
+    source: column
+    target: disorder_type
+    description: ACLED disorder type.
+    allowed_values: [Political violence, Demonstrations, "Political violence; Demonstrations"]
+  - name: admin1
+    source: column
+    target: admin1
+    description: First sub-national unit name.
+excluded_columns: [geometry, geometry_bbox]
+order_by: [country, year, event_date, event_id_cnty]

@@ -11,6 +11,7 @@ from adaptation_atlas_api.domain.models.dataset import (
     StorageDefinition,
 )
 from adaptation_atlas_api.domain.models.query import (
+    DerivedCondition,
     OutputFormat,
     Predicate,
     PredicateOperator,
@@ -22,6 +23,7 @@ from adaptation_atlas_api.domain.models.results import TabularResult
 __all__ = [
     "DatasetDefinition",
     "DatasetType",
+    "DerivedCondition",
     "FieldType",
     "FilterDefinition",
     "FilterSource",

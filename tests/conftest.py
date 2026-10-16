@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -17,7 +18,8 @@ from adaptation_atlas_api.main import create_app
 from tests.fixtures.synthetic_data import build_storage_tree
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CATALOG_PATH = PROJECT_ROOT / "catalog"
+PROJECT_CATALOG = PROJECT_ROOT / "catalog"
+TEST_CATALOG = Path(__file__).resolve().parent / "fixtures" / "catalog"
 
 
 @pytest.fixture(scope="session")
@@ -33,9 +35,18 @@ def local_storage(storage_root: Path) -> LocalStorage:
 
 
 @pytest.fixture(scope="session")
-def catalog(local_storage: LocalStorage) -> YamlCatalogRepository:
-    """Catalog loaded from the real ``catalog/`` directory of the project."""
-    repository = YamlCatalogRepository(CATALOG_PATH, storage=local_storage)
+def catalog_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Catalog directory combining the project catalog with the test-only datasets."""
+    target = tmp_path_factory.mktemp("catalog")
+    shutil.copytree(PROJECT_CATALOG, target / "project")
+    shutil.copytree(TEST_CATALOG, target / "tests")
+    return target
+
+
+@pytest.fixture(scope="session")
+def catalog(local_storage: LocalStorage, catalog_path: Path) -> YamlCatalogRepository:
+    """Catalog loaded from the project definitions plus the test fixtures."""
+    repository = YamlCatalogRepository(catalog_path, storage=local_storage)
     repository.load()
     return repository
 
@@ -57,7 +68,7 @@ def reader(local_storage: LocalStorage) -> DuckDBTabularReader:
 
 
 @pytest.fixture(scope="session")
-def test_settings(storage_root: Path) -> Settings:
+def test_settings(storage_root: Path, catalog_path: Path) -> Settings:
     """Settings using the local backend and the synthetic tree."""
     return Settings(
         _env_file=None,  # type: ignore[call-arg]
@@ -65,7 +76,7 @@ def test_settings(storage_root: Path) -> Settings:
         log_level="WARNING",
         storage_backend="local",
         local_storage_root=storage_root,
-        catalog_path=CATALOG_PATH,
+        catalog_path=catalog_path,
         partition_cache_ttl_seconds=0,
         duckdb_memory_limit="512MB",
         duckdb_threads=2,

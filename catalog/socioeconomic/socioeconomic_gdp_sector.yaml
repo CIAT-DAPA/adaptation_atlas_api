@@ -1,0 +1,34 @@
+# World Bank GDP by sector (constant 2015 USD) by country and year.
+id: socioeconomic_gdp_sector
+name: GDP by sector (World Bank)
+domain: socioeconomic
+description: >-
+  Gross domestic product in constant 2015 US dollars for agriculture, industry,
+  manufacturing, services and the total economy, by country for 2017-2022.
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=socioeconomic/type=economic/source=worldbank_gdp/region=ssa/{file}"
+  file_patterns:
+    default: "variable=adm0_sectorGDP_usd2015.parquet"
+  default_file_pattern: default
+filters:
+  - name: country
+    source: column
+    target: iso3
+    required: false
+    case_insensitive: true
+    description: ISO 3166-1 alpha-3 country code.
+    example: KEN
+    allowed_values: [AGO, BDI, BEN, BFA, BWA, CAF, CIV, CMR, COD, COG, COM, CPV, DJI, DZA, EGY, ERI, ESH, ETH, GAB, GHA, GIN, GMB, GNB, GNQ, KEN, LBR, LBY, LSO, MAR, MDG, MLI, MOZ, MRT, MUS, MWI, NAM, NER, NGA, RWA, SDN, SEN, SLE, SOM, SSD, STP, SWZ, SYC, TCD, TGO, TUN, TZA, UGA, ZAF, ZMB, ZWE]
+  - name: sector
+    source: column
+    target: sector
+    description: Economic sector.
+    allowed_values: [total, agriculture, industry, manufacturing, services]
+  - name: year
+    source: column
+    target: year
+    description: Year.
+    allowed_values: ["2017", "2018", "2019", "2020", "2021", "2022"]
+order_by: [iso3, year, sector]

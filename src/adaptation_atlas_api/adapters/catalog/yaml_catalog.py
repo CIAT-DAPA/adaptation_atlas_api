@@ -1,6 +1,6 @@
 """Catalog repository backed by one YAML file per dataset.
 
-Every ``*.yaml`` / ``*.yml`` file inside the catalog directory is parsed and
+Every ``*.yaml`` / ``*.yml`` file inside the catalog directory (recursively) is parsed and
 validated against :class:`DatasetDefinition`. When a dataset enables
 ``metadata_sidecar`` and a storage adapter is supplied, the ``<file>.json``
 sidecars found next to the Parquet files are merged into ``dataset.metadata``.
@@ -53,8 +53,9 @@ class YamlCatalogRepository(CatalogRepository):
             )
 
         loaded: dict[str, DatasetDefinition] = {}
+        # Definitions may be organised in sub-folders (one per domain).
         files = sorted(
-            list(self._catalog_path.glob("*.yaml")) + list(self._catalog_path.glob("*.yml"))
+            list(self._catalog_path.rglob("*.yaml")) + list(self._catalog_path.rglob("*.yml"))
         )
 
         # Parse every definition file, failing on the first invalid one.

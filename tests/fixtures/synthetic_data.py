@@ -128,6 +128,143 @@ def _write(root: Path, relative_path: str, columns: dict[str, list]) -> Path:
     return path
 
 
+def _write_phenology(root: Path) -> None:
+    """Write per-country phenology files (standard and plus-rain variants).
+
+    Args:
+        root: Storage root directory.
+    """
+    folder = (
+        "domain=phenology/type=sos_eos/source=glass_nvdi/region=africa/processing=raw/level=adm1"
+    )
+    # One pair of files per country, mirroring ``KEN_seasonal-phenology[_plus-rain].parquet``.
+    for iso3, regions in (("KEN", ["Nairobi", "Nakuru"]), ("ETH", ["Oromia"])):
+        base: dict[str, list] = {"admin1_name": [], "year": [], "season": [], "sos": [], "eos": []}
+        # Two seasons per region and year.
+        for region in regions:
+            for year in (2019, 2020):
+                for season in ("1", "2"):
+                    base["admin1_name"].append(region)
+                    base["year"].append(year)
+                    base["season"].append(season)
+                    base["sos"].append(60 if season == "1" else 240)
+                    base["eos"].append(150 if season == "1" else 330)
+        _write(root, f"{folder}/{iso3}_seasonal-phenology.parquet", base)
+        with_rain = dict(base)
+        with_rain["rain_total"] = [float(100 + index) for index in range(len(base["year"]))]
+        _write(root, f"{folder}/{iso3}_seasonal-phenology_plus-rain.parquet", with_rain)
+
+
+def _write_climate_observed(root: Path) -> None:
+    """Write single-file observed climate tables for admin0 and admin1.
+
+    Args:
+        root: Storage root directory.
+    """
+    folder = "domain=climate/type=observational/source=chirps-chirts-era5/region=africa"
+    # Monthly and period aggregations live in sibling processing folders.
+    for processing in ("admin-monthly", "admin-periods"):
+        for level in ("0", "1"):
+            columns: dict[str, list] = {
+                "iso3": [],
+                "admin0_name": [],
+                "admin1_name": [],
+                "year": [],
+                "month": [],
+                "variable": [],
+                "value": [],
+                "unit": [],
+            }
+            regions = [None] if level == "0" else ["Nairobi", "Nakuru"]
+            # One row per region, month and variable for a single year.
+            for region in regions:
+                for month in (1, 2):
+                    for variable, unit in (("prec", "mm"), ("tmax", "C")):
+                        columns["iso3"].append("KEN")
+                        columns["admin0_name"].append("Kenya")
+                        columns["admin1_name"].append(region)
+                        columns["year"].append(2020)
+                        columns["month"].append(month)
+                        columns["variable"].append(variable)
+                        columns["value"].append(float(month * 10))
+                        columns["unit"].append(unit)
+            _write(
+                root, f"{folder}/processing={processing}/variable=adm{level}_obs.parquet", columns
+            )
+
+
+def _write_hazard_change(root: Path) -> None:
+    """Write two hazard-change indicator files with different schemas.
+
+    Args:
+        root: Storage root directory.
+    """
+    folder = (
+        "domain=climate/type=hazard-indices/source=nex-gddp-cmip6/region=africa"
+        "/processing=hazard-change/timeframe=annual"
+    )
+    ensemble: dict[str, list] = {
+        "iso3": [],
+        "admin0_name": [],
+        "admin1_name": [],
+        "admin2_name": [],
+        "scenario": [],
+        "hazard": [],
+        "severity": [],
+        "mean": [],
+    }
+    # Frequency ensemble rows for two countries, two hazards and two severities.
+    for iso3, admin0 in (("KEN", "Kenya"), ("ETH", "Ethiopia")):
+        for hazard in ("NDWS", "NDWL0"):
+            for severity in ("severe", "extreme"):
+                ensemble["iso3"].append(iso3)
+                ensemble["admin0_name"].append(admin0)
+                ensemble["admin1_name"].append(None)
+                ensemble["admin2_name"].append(None)
+                ensemble["scenario"].append("ssp245")
+                ensemble["hazard"].append(hazard)
+                ensemble["severity"].append(severity)
+                ensemble["mean"].append(float("nan") if hazard == "NDWL0" else 1.5)
+    _write(root, f"{folder}/variable=haz_freq_ensemble.parquet", ensemble)
+    # Precipitation change rows have no hazard/severity/admin2 columns at all.
+    change: dict[str, list] = {
+        "iso3": ["KEN", "KEN"],
+        "admin0_name": ["Kenya", "Kenya"],
+        "admin1_name": [None, "Nakuru"],
+        "scenario": ["ssp245", "ssp245"],
+        "direction": ["increase_5", "decrease_5"],
+        "mean": [40.0, 60.0],
+    }
+    _write(root, f"{folder}/variable=ptot_change_ensemble.parquet", change)
+
+
+def _write_gyga(root: Path) -> None:
+    """Write a GYGA-like crop file with a binary geometry column.
+
+    Args:
+        root: Storage root directory.
+    """
+    folder = "domain=impacts/type=production/source=gyga/region=ssa/processing=raw"
+    table = pa.table(
+        {
+            "station_id": [1.0, 2.0],
+            "crop": ["bean", "bean"],
+            "yield_rfd": [1.2, 2.4],
+            "admin0_name": ["Kenya", "Kenya"],
+            "admin1_name": ["Nakuru", "Nairobi"],
+            "admin2_name": ["Naivasha", "Westlands"],
+            "geometry": pa.array([b"\x01\x02", b"\x03\x04"], type=pa.binary()),
+            "geometry_bbox": pa.array(
+                [{"xmin": 1.0, "ymin": 2.0}, {"xmin": 3.0, "ymin": 4.0}],
+                type=pa.struct([("xmin", pa.float32()), ("ymin", pa.float32())]),
+            ),
+        }
+    )
+    path = root / f"{folder}/bean.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, path)
+
+
 def build_storage_tree(root: Path) -> Path:
     """Create the synthetic bucket tree under ``root``.
 
@@ -137,6 +274,10 @@ def build_storage_tree(root: Path) -> Path:
     Returns:
         ``root`` for convenience.
     """
+    _write_phenology(root)
+    _write_climate_observed(root)
+    _write_hazard_change(root)
+    _write_gyga(root)
     historic = [("historic", "historic")]
     atlas_leaf = (
         f"{ATLAS_PREFIX}/variable=vop_intld15/period=annual/model=historic/severity=moderate"
