@@ -1,0 +1,154 @@
+"""Partition index built by listing the storage and parsing Hive style paths."""
+
+from __future__ import annotations
+
+import fnmatch
+import logging
+import threading
+import time
+from dataclasses import dataclass, field
+
+from adaptation_atlas_api.domain.models.dataset import DatasetDefinition
+from adaptation_atlas_api.ports.partition_index import PartitionIndex
+from adaptation_atlas_api.ports.storage import Storage
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _IndexEntry:
+    """Cached combinations of one dataset.
+
+    Attributes:
+        built_at: Monotonic timestamp of the last build.
+        combinations: Existing partition combinations.
+    """
+
+    built_at: float
+    combinations: list[dict[str, str]] = field(default_factory=list)
+
+
+class StoragePartitionIndex(PartitionIndex):
+    """Discovers existing partition combinations by listing Parquet files in storage.
+
+    The listing is cached per dataset for ``ttl_seconds`` so the storage is not
+    scanned on every request.
+    """
+
+    def __init__(self, storage: Storage, ttl_seconds: int = 3600) -> None:
+        """Create the index.
+
+        Args:
+            storage: Storage adapter used to list files.
+            ttl_seconds: Lifetime of a cached listing; ``0`` disables caching.
+        """
+        self._storage = storage
+        self._ttl = ttl_seconds
+        self._cache: dict[str, _IndexEntry] = {}
+        self._lock = threading.Lock()
+
+    def available_combinations(self, dataset: DatasetDefinition) -> list[dict[str, str]]:
+        """Return the existing partition combinations, rebuilding the cache when stale.
+
+        Args:
+            dataset: Dataset whose storage is listed.
+
+        Returns:
+            One dictionary per leaf folder with partition values and ``file_pattern`` keys.
+        """
+        with self._lock:
+            entry = self._cache.get(dataset.id)
+
+            # Rebuild the listing when it is missing or older than the TTL.
+            if entry is None or (time.monotonic() - entry.built_at) > self._ttl:
+                entry = _IndexEntry(built_at=time.monotonic(), combinations=self._build(dataset))
+                self._cache[dataset.id] = entry
+            return [dict(item) for item in entry.combinations]
+
+    def available_values(self, dataset: DatasetDefinition, partition: str) -> list[str]:
+        """Return the sorted distinct values of ``partition`` found in storage.
+
+        Args:
+            dataset: Dataset whose storage is listed.
+            partition: Partition key.
+
+        Returns:
+            Sorted distinct values.
+        """
+        values = {
+            combination[partition]
+            for combination in self.available_combinations(dataset)
+            if partition in combination
+        }
+        return sorted(values)
+
+    def refresh(self, dataset: DatasetDefinition) -> None:
+        """Drop the cached listing of ``dataset`` so it is rebuilt on next access.
+
+        Args:
+            dataset: Dataset whose cache entry is dropped.
+        """
+        with self._lock:
+            self._cache.pop(dataset.id, None)
+
+    def _build(self, dataset: DatasetDefinition) -> list[dict[str, str]]:
+        """List the dataset prefix and parse every Parquet key into partition values.
+
+        Args:
+            dataset: Dataset whose storage is listed.
+
+        Returns:
+            Existing combinations, one per leaf folder, sorted deterministically.
+        """
+        prefix = dataset.storage.static_prefix
+        partition_names = {partition.name for partition in dataset.partitions}
+        keys = self._storage.list_files(prefix, suffix=".parquet")
+        logger.info("Partition index for '%s': %d parquet files listed", dataset.id, len(keys))
+
+        combinations: dict[tuple[tuple[str, str], ...], dict[str, str]] = {}
+
+        # Parse each key into its partition values and the file pattern it belongs to.
+        for key in keys:
+            folder, _, file_name = key.rpartition("/")
+            values: dict[str, str] = {}
+
+            # Extract ``name=value`` segments that correspond to declared partitions.
+            for segment in folder.split("/"):
+                name, separator, value = segment.partition("=")
+                # Segments without ``=`` or with undeclared keys are not partitions.
+                if separator and name in partition_names:
+                    values[name] = value
+
+            pattern_key = self._match_pattern(dataset, file_name)
+            # Files that match no registered pattern are ignored.
+            if pattern_key is None:
+                continue
+
+            identity = tuple(sorted(values.items()))
+            combination = combinations.setdefault(identity, dict(values))
+            patterns = combination.get("file_patterns", "")
+            # Accumulate every pattern key found in the same leaf folder.
+            if pattern_key not in patterns.split(","):
+                combination["file_patterns"] = (
+                    f"{patterns},{pattern_key}" if patterns else pattern_key
+                )
+
+        return [combinations[identity] for identity in sorted(combinations)]
+
+    @staticmethod
+    def _match_pattern(dataset: DatasetDefinition, file_name: str) -> str | None:
+        """Find the file pattern key whose glob matches ``file_name``.
+
+        Args:
+            dataset: Dataset declaring the file patterns.
+            file_name: Base name of the file.
+
+        Returns:
+            The matching pattern key, or ``None`` when no pattern matches.
+        """
+        # Patterns are checked in catalog order so more specific ones can be listed first.
+        for key, glob in dataset.storage.file_patterns.items():
+            # ``fnmatch`` implements the same glob semantics used by DuckDB for file names.
+            if fnmatch.fnmatch(file_name, glob):
+                return key
+        return None

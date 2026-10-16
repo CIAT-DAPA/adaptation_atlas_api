@@ -1,0 +1,287 @@
+# --------------------------------------------------------------------------- #
+# HU-001 - Hazard exposure (hazard frequency x exposure value) by territory
+#
+# Storage layout (Hive partitioned, bucket root relative):
+#   domain=hazard_exposure/source=<source>/region=ssa/processing=hazard-risk-exposure/
+#     variable=<variable>/period=<season_type>/model=<model>/severity=<severity>/
+#       interaction.parquet | int=multi-hazard.parquet | solo.parquet
+#
+# Partition values come from the folder names; scenario, timeframe, crop, hazard and
+# hazard_vars are columns inside the Parquet files.
+# --------------------------------------------------------------------------- #
+id: hazard_exposure
+name: Hazard exposure by administrative unit
+description: >-
+  Hazard occurrence frequency (0-1) multiplied by the exposed value of production,
+  summarised by country, first and second sub-national administrative units for
+  crops and livestock across Sub-Saharan Africa. Produced by the Adaptation Atlas
+  hazard-risk-exposure pipeline from CMIP6 climate projections.
+type: tabular
+reader: duckdb_parquet
+
+storage:
+  path_template: "domain=hazard_exposure/source={source}/region=ssa/processing=hazard-risk-exposure/variable={variable}/period={period}/model={model}/severity={severity}/{file}"
+  file_patterns:
+    interaction: "int*.parquet"   # interaction.parquet, int=multi-hazard.parquet
+    solo: "solo.parquet"
+  default_file_pattern: interaction
+  discover_partitions: true
+  metadata_sidecar: true
+
+partitions:
+  - name: source
+    description: Climate data source used to compute the hazards.
+    allowed_values: [atlas_cmip6, nex-gddp-cmip6]
+  - name: variable
+    description: Exposure variable and its unit.
+    allowed_values: [vop_intld15, vop_usd15, vop_nominal-usd21]
+  - name: period
+    description: Calendar used to compute hazard frequency (annual or crop season).
+    allowed_values: [annual, jagermeyr]
+  - name: model
+    description: Climate model or ensemble statistic.
+    allowed_values:
+      - historic
+      - ENSEMBLE
+      - ENSEMBLEmean
+      - ENSEMBLEsd
+      - ACCESS-ESM1-5
+      - EC-Earth3
+      - INM-CM5-0
+      - MPI-ESM1-2-HR
+      - MRI-ESM2-0
+  - name: severity
+    description: Hazard severity threshold.
+    allowed_values: [moderate, severe, extreme]
+
+filters:
+  # ---- Required ----------------------------------------------------------- #
+  - name: country
+    source: column
+    target: iso3
+    required: true
+    case_insensitive: true
+    description: ISO 3166-1 alpha-3 country code.
+    example: KEN
+    allowed_values:
+      - AGO
+      - BDI
+      - BEN
+      - BFA
+      - BWA
+      - CAF
+      - CIV
+      - CMR
+      - COD
+      - COG
+      - COM
+      - CPV
+      - DJI
+      - DZA
+      - EGY
+      - ERI
+      - ESH
+      - ETH
+      - GAB
+      - GHA
+      - GIN
+      - GMB
+      - GNB
+      - GNQ
+      - KEN
+      - LBR
+      - LBY
+      - LSO
+      - MAR
+      - MDG
+      - MLI
+      - MOZ
+      - MRT
+      - MUS
+      - MWI
+      - NAM
+      - NER
+      - NGA
+      - RWA
+      - SDN
+      - SEN
+      - SLE
+      - SOM
+      - SSD
+      - STP
+      - SWZ
+      - SYC
+      - TCD
+      - TGO
+      - TUN
+      - TZA
+      - UGA
+      - ZAF
+      - ZMB
+      - ZWE
+  - name: period
+    source: column
+    target: timeframe
+    required: true
+    description: Period analysed, historic or a projected 20-year window.
+    example: historic
+    allowed_values: [historic, "1995-2014", "2021-2040", "2041-2060", "2061-2080", "2081-2100"]
+
+  # ---- Partition filters (select folders in storage) ---------------------- #
+  - name: source
+    source: partition
+    target: source
+    default: atlas_cmip6
+    description: Climate data source.
+    allowed_values: [atlas_cmip6, nex-gddp-cmip6]
+  - name: variable
+    source: partition
+    target: variable
+    description: Exposure variable and unit.
+    example: vop_intld15
+    allowed_values: [vop_intld15, vop_usd15, vop_nominal-usd21]
+  - name: season_type
+    source: partition
+    target: period
+    description: Calendar used for hazard frequency, annual or crop season (jagermeyr).
+    example: annual
+    allowed_values: [annual, jagermeyr]
+  - name: model
+    source: partition
+    target: model
+    description: Climate model or ensemble statistic.
+    example: ENSEMBLEmean
+    allowed_values:
+      - historic
+      - ENSEMBLE
+      - ENSEMBLEmean
+      - ENSEMBLEsd
+      - ACCESS-ESM1-5
+      - EC-Earth3
+      - INM-CM5-0
+      - MPI-ESM1-2-HR
+      - MRI-ESM2-0
+  - name: severity
+    source: partition
+    target: severity
+    description: Hazard severity threshold.
+    example: moderate
+    allowed_values: [moderate, severe, extreme]
+
+  # ---- File selector ------------------------------------------------------ #
+  - name: hazard_type
+    source: file_pattern
+    default: interaction
+    description: Compound hazard interactions or single (solo) hazards.
+    allowed_values: [interaction, solo]
+
+  # ---- Column filters ----------------------------------------------------- #
+  - name: scenario
+    source: column
+    target: scenario
+    description: Emissions scenario.
+    example: ssp245
+    allowed_values: [historic, ssp126, ssp245, ssp370, ssp585]
+  - name: crop
+    source: column
+    target: crop
+    description: Crop or livestock commodity.
+    example: maize
+    allowed_values:
+      - arabica-coffee
+      - banana
+      - barley
+      - bean
+      - cassava
+      - cattle-highland
+      - cattle-tropical
+      - chickpea
+      - cocoa
+      - coconut
+      - cotton
+      - cowpea
+      - generic-crop
+      - goats-highland
+      - goats-tropical
+      - groundnut
+      - lentil
+      - maize
+      - oilpalm
+      - pearl-millet
+      - pigeonpea
+      - pigs-highland
+      - pigs-tropical
+      - plantain
+      - potato
+      - poultry-highland
+      - poultry-tropical
+      - rapeseed
+      - rice
+      - robusta-coffee
+      - sesameseed
+      - sheep-highland
+      - sheep-tropical
+      - small-millet
+      - sorghum
+      - soybean
+      - sugarbeet
+      - sugarcane
+      - sunflower
+      - sweet-potato
+      - tea
+      - tobacco
+      - wheat
+      - yams
+  - name: hazard
+    source: column
+    target: hazard
+    description: Hazard or compound hazard grouping.
+    example: dry+heat
+    allowed_values: [any, none, dry, heat, wet, dry+heat, dry+wet, heat+wet, dry+heat+wet]
+  - name: hazard_vars
+    source: column
+    target: hazard_vars
+    description: Hazard indices combined in the calculation.
+    example: NDWS+NTx35+NDWL0
+    allowed_values:
+      - NDWS+NTx35+NDWL0
+      - NDWS+NTxM+NDWL0
+      - PTOT-L+NTxM+PTOT-G
+      - PTOT-L+NTxS+PTOT-G
+      - NDWS+THI-max+NDWL0
+      - PTOT-L+THI-max+PTOT-G
+
+  # ---- Derived filters ---------------------------------------------------- #
+  - name: admin_level
+    source: derived
+    target: admin_level
+    description: >-
+      Administrative level of the records: 0 (country), 1 (first sub-national unit)
+      or 2 (second sub-national unit).
+    example: "1"
+    allowed_values: ["0", "1", "2"]
+
+response_fields:
+  - { name: iso3, type: string, description: ISO 3166-1 alpha-3 country code. }
+  - { name: admin0_name, type: string, description: Country name. }
+  - { name: admin1_name, type: string, description: First sub-national unit name (null at level 0). }
+  - { name: admin2_name, type: string, description: Second sub-national unit name (null at levels 0 and 1). }
+  - { name: gaul0_code, type: integer, description: GAUL code of the country (null when not published). }
+  - { name: gaul1_code, type: integer, description: GAUL code of the admin1 unit (null when not published). }
+  - { name: gaul2_code, type: integer, description: GAUL code of the admin2 unit (null when not published). }
+  - { name: source, type: string, description: Climate data source. }
+  - { name: scenario, type: string, description: Emissions scenario. }
+  - { name: model, type: string, description: Climate model or ensemble statistic. }
+  - { name: timeframe, type: string, description: Period analysed. }
+  - { name: season_type, source: period, type: string, description: Calendar used (annual or jagermeyr). }
+  - { name: hazard, type: string, description: Hazard or compound hazard grouping. }
+  - { name: hazard_vars, type: string, description: Hazard indices combined in the calculation. }
+  - { name: crop, type: string, description: Crop or livestock commodity. }
+  - { name: severity, type: string, description: Hazard severity threshold. }
+  - { name: exposure_var, type: string, description: Exposure variable (vop = value of production). }
+  - { name: exposure_unit, type: string, description: Unit of the exposure variable. }
+  - { name: value, type: number, description: Hazard frequency (0-1) x exposure value. }
+
+order_by: [iso3, admin1_name, admin2_name, crop, hazard_vars, hazard, scenario, timeframe]
+
+output_formats: [json, csv]
