@@ -59,6 +59,12 @@ class InvalidFilterValueError(DomainError):
     code = "invalid_filter_value"
 
 
+class FilterNotApplicableError(DomainError):
+    """A registered filter targets a column absent from the files selected by the query."""
+
+    code = "filter_not_applicable"
+
+
 class UnsupportedFormatError(DomainError):
     """The requested output format is not supported by the dataset."""
 

@@ -14,7 +14,7 @@ from adaptation_atlas_api.adapters.storage.partition_index import StoragePartiti
 from adaptation_atlas_api.adapters.storage.s3_storage import S3Storage
 from adaptation_atlas_api.domain.exceptions import CatalogConfigurationError
 from adaptation_atlas_api.domain.services.catalog import CatalogService
-from adaptation_atlas_api.domain.services.hazard_exposure import HazardExposureService
+from adaptation_atlas_api.domain.services.tabular_dataset import TabularDatasetService
 from adaptation_atlas_api.infrastructure.config import Settings
 from adaptation_atlas_api.ports.catalog_repository import CatalogRepository
 from adaptation_atlas_api.ports.partition_index import PartitionIndex
@@ -35,7 +35,7 @@ class Container:
         partition_index: Index of existing partition combinations.
         tabular_reader: Reader used for tabular datasets.
         catalog_service: Dataset discovery use cases.
-        hazard_exposure_service: HU-001 use case.
+        tabular_service: Generic tabular records use case (serves HU-001 and others).
     """
 
     settings: Settings
@@ -44,7 +44,7 @@ class Container:
     partition_index: PartitionIndex
     tabular_reader: TabularReader
     catalog_service: CatalogService
-    hazard_exposure_service: HazardExposureService
+    tabular_service: TabularDatasetService
 
 
 def build_storage(settings: Settings) -> Storage:
@@ -108,7 +108,7 @@ def build_container(settings: Settings) -> Container:
     )
 
     catalog_service = CatalogService(catalog, partition_index)
-    hazard_exposure_service = HazardExposureService(
+    tabular_service = TabularDatasetService(
         catalog,
         tabular_reader,
         max_rows=settings.max_rows_per_response,
@@ -124,7 +124,7 @@ def build_container(settings: Settings) -> Container:
         partition_index=partition_index,
         tabular_reader=tabular_reader,
         catalog_service=catalog_service,
-        hazard_exposure_service=hazard_exposure_service,
+        tabular_service=tabular_service,
     )
 
 
@@ -164,13 +164,13 @@ def get_catalog_service(request: Request) -> CatalogService:
     return get_container(request).catalog_service
 
 
-def get_hazard_exposure_service(request: Request) -> HazardExposureService:
-    """Return the HU-001 service.
+def get_tabular_service(request: Request) -> TabularDatasetService:
+    """Return the generic tabular records service.
 
     Args:
         request: The incoming request.
 
     Returns:
-        The hazard exposure service.
+        The tabular dataset service.
     """
-    return get_container(request).hazard_exposure_service
+    return get_container(request).tabular_service

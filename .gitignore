@@ -34,3 +34,6 @@ Thumbs.db
 samples/
 *.parquet
 .import_linter_cache/
+
+# Local inspection results
+inspection.json

@@ -120,6 +120,7 @@ def validate_filters(
     column_filters: dict[str, str] = {}
     derived_predicates: list[Predicate] = []
     applied: dict[str, str] = {}
+    filter_names_by_column: dict[str, str] = {}
     file_pattern_key = dataset.storage.default_file_pattern
 
     # Resolve every registered filter: supplied value, default value or required check.
@@ -170,6 +171,7 @@ def validate_filters(
         # Column filters become equality predicates inside the files.
         else:
             column_filters[filter_definition.resolved_target] = canonical
+            filter_names_by_column[filter_definition.resolved_target] = filter_definition.name
 
     return ValidatedFilters(
         partition_values=partition_values,
@@ -177,4 +179,5 @@ def validate_filters(
         derived_predicates=derived_predicates,
         file_pattern_key=file_pattern_key,
         applied=applied,
+        filter_names_by_column=filter_names_by_column,
     )

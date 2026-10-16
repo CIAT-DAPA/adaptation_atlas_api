@@ -1,0 +1,38 @@
+# WorldPop 2024 population aggregated to GAUL 2024 administrative units (levels 0-2) by
+# gender and settlement type. The source has country names but no ISO3 code.
+id: exposure_population_worldpop
+name: Population by administrative unit (WorldPop 2024)
+domain: exposure
+description: >-
+  Total, male and female population in rural, urban and all settlements for every GAUL
+  2024 country, first and second sub-national unit in Africa, from WorldPop 2024.
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=exposure/type=population/source=worldpop2024region=africa/processing=aggregated/boundaries=gaul24_a0-1-2/{file}"
+  file_patterns:
+    default: "population_gaul24.parquet"
+  default_file_pattern: default
+filters:
+  - name: country_name
+    source: column
+    target: admin0_name
+    required: true
+    description: Country name as spelled in GAUL 2024 (e.g. Kenya, United Republic of Tanzania).
+    example: Kenya
+  - name: gender
+    source: column
+    target: gender
+    description: Population gender.
+    allowed_values: [total, female, male]
+  - name: settlement
+    source: column
+    target: settlement
+    description: Settlement type.
+    allowed_values: [total, rural, urban]
+  - name: admin_level
+    source: derived
+    target: admin_level
+    description: "Administrative level of the records: 0 (country), 1 (first sub-national unit), 2 (second sub-national unit)."
+    allowed_values: ["0", "1", "2"]
+order_by: [admin0_name, admin1_name, admin2_name, gender, settlement]

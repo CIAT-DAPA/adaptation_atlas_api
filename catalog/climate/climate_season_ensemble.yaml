@@ -1,0 +1,87 @@
+# Seasonal (three-month) ensemble statistics of hazard indices from NEX-GDDP-CMIP6: yearly
+# time series with anomalies versus a baseline, inter-annual variability and trends.
+# Partitioned by projected period and baseline; the product selects the file.
+id: climate_season_ensemble
+name: Seasonal climate hazard ensemble statistics (NEX-GDDP-CMIP6)
+domain: climate
+description: >-
+  Ensemble mean, standard deviation and 17th/83rd percentiles of seasonal hazard indices
+  (precipitation, temperature, heat and water stress indices) by country and first
+  sub-national unit, per year of the historical (1981-2014, 1995-2014) and projected
+  (2021-2100) periods, with anomalies against the selected baseline, plus inter-annual
+  variability and decadal trends.
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=climate/type=hazard-indices/source=nex-gddp-cmip6/region=africa/processing=timeseries_mean_month/timeframe=3months/period={period}/baseline={baseline}/{file}"
+  file_patterns:
+    timeseries: "variable=ensemble_season_timeseries.parquet"
+    variability: "variable=ensemble_season_variability.parquet"
+    trends: "variable=ensemble_season_trends.parquet"
+  default_file_pattern: timeseries
+  discover_partitions: true
+partitions:
+  - name: period
+    description: Period covered by the statistics.
+    allowed_values: ["1981-2014", "1995-2014", "2021-2040", "2041-2060", "2061-2080", "2081-2100"]
+  - name: baseline
+    description: Historical baseline used for anomalies.
+    allowed_values: ["1981-2014", "1995-2014"]
+filters:
+  - name: country
+    source: column
+    target: iso3
+    required: true
+    case_insensitive: true
+    description: ISO 3166-1 alpha-3 country code.
+    example: KEN
+    allowed_values: [AGO, BDI, BEN, BFA, BWA, CAF, CIV, CMR, COD, COG, COM, CPV, DJI, DZA, EGY, ERI, ESH, ETH, GAB, GHA, GIN, GMB, GNB, GNQ, KEN, LBR, LBY, LSO, MAR, MDG, MLI, MOZ, MRT, MUS, MWI, NAM, NER, NGA, RWA, SDN, SEN, SLE, SOM, SSD, STP, SWZ, SYC, TCD, TGO, TUN, TZA, UGA, ZAF, ZMB, ZWE]
+  - name: period
+    source: partition
+    target: period
+    required: true
+    description: Period covered by the statistics.
+    example: "2041-2060"
+    allowed_values: ["1981-2014", "1995-2014", "2021-2040", "2041-2060", "2061-2080", "2081-2100"]
+  - name: baseline
+    source: partition
+    target: baseline
+    default: "1995-2014"
+    description: Historical baseline used for anomalies.
+    allowed_values: ["1981-2014", "1995-2014"]
+  - name: product
+    source: file_pattern
+    default: timeseries
+    description: Yearly time series, inter-annual variability or trends.
+    allowed_values: [timeseries, variability, trends]
+  - name: scenario
+    source: column
+    target: scenario
+    description: Emissions scenario (historical for baseline periods).
+    allowed_values: [historical, ssp126, ssp245, ssp370, ssp585]
+  - name: season
+    source: column
+    target: season
+    description: Three-month season or annual.
+    allowed_values: [annual, JFM, FMA, MAM, AMJ, MJJ, JJA, JAS, ASO, SON, OND, NDJ, DJF]
+  - name: hazard
+    source: column
+    target: hazard
+    description: Hazard index.
+    allowed_values: [PTOT, TAVG, TMAX, NDD, NDWS, NDWL0, NTx35, HSH-max, THI-max]
+  - name: year
+    source: column
+    target: year
+    description: Year (timeseries product only).
+    example: "2045"
+  - name: stat
+    source: column
+    target: stat
+    description: Statistic (variability and trends products only).
+    allowed_values: [iav_sd, iav_delta, value_slope, value_decade]
+  - name: admin_level
+    source: derived
+    target: admin_level
+    description: "Administrative level: 0 (country) or 1 (first sub-national unit)."
+    allowed_values: ["0", "1"]
+order_by: [iso3, admin1_name, scenario, hazard, season, year]

@@ -1,0 +1,40 @@
+# Kenya flood exposure intersections at sub-county level: seasonal observed flooding (GFM),
+# flood-prone areas by return period (JRC) and the totals used as denominators.
+id: exposure_kenya_flood_intersect
+name: Kenya flood exposure by sub-county
+domain: exposure
+description: >-
+  Population, roads, power grid, schools and health facilities exposed to flooding in each
+  Kenyan sub-county: observed seasonal floods 2018-2025 (Global Flood Monitoring), JRC
+  flood-prone areas by return period, and sub-county totals.
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=exposure/type=intersect/region=kenya/processing=analysis-ready/{file}"
+  file_patterns:
+    gfm_seasonal: "exposure_gfm_seasonal.parquet"
+    jrc_return_period: "exposure_jrc_rp.parquet"
+    totals: "exposure_totals.parquet"
+  default_file_pattern: gfm_seasonal
+filters:
+  - name: table
+    source: file_pattern
+    default: gfm_seasonal
+    description: Seasonal observed floods, JRC return periods or sub-county totals.
+    allowed_values: [gfm_seasonal, jrc_return_period, totals]
+  - name: county
+    source: column
+    target: adm1_name
+    description: County name.
+    example: Nakuru
+  - name: year
+    source: column
+    target: year
+    description: Year of the flood season (gfm_seasonal only, 2018-2025).
+    example: "2024"
+  - name: season
+    source: column
+    target: season
+    description: Three-month season (gfm_seasonal only).
+    allowed_values: [JFM, FMA, MAM, AMJ, MJJ, JJA, JAS, ASO, SON, OND, NDJ, DJF]
+order_by: [adm1_name, adm2_name, year, season]

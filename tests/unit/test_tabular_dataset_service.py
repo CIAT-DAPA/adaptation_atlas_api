@@ -1,4 +1,4 @@
-"""Unit tests for the HU-001 service using a fake reader (no DuckDB involved)."""
+"""Unit tests for the generic tabular service using a fake reader (no DuckDB involved)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from adaptation_atlas_api.domain.exceptions import (
 )
 from adaptation_atlas_api.domain.models.query import OutputFormat, TabularQuery
 from adaptation_atlas_api.domain.models.results import TabularResult
-from adaptation_atlas_api.domain.services.hazard_exposure import HazardExposureService
+from adaptation_atlas_api.domain.services.tabular_dataset import TabularDatasetService
 from adaptation_atlas_api.ports.tabular_reader import TabularReader
 
 
@@ -36,11 +36,11 @@ def fake_reader() -> FakeReader:
 
 
 @pytest.fixture
-def service(catalog: YamlCatalogRepository, fake_reader: FakeReader) -> HazardExposureService:
-    return HazardExposureService(catalog, fake_reader, max_rows=100, default_page_size=10)
+def service(catalog: YamlCatalogRepository, fake_reader: FakeReader) -> TabularDatasetService:
+    return TabularDatasetService(catalog, fake_reader, max_rows=100, default_page_size=10)
 
 
-def test_unknown_dataset_raises_not_found(service: HazardExposureService) -> None:
+def test_unknown_dataset_raises_not_found(service: TabularDatasetService) -> None:
     with pytest.raises(DatasetNotFoundError) as error:
         service.query("nope", {"country": "KEN", "period": "historic"})
     assert error.value.parameter == "dataset_id"
@@ -48,7 +48,7 @@ def test_unknown_dataset_raises_not_found(service: HazardExposureService) -> Non
 
 
 def test_query_builds_validated_query_and_delegates(
-    service: HazardExposureService, fake_reader: FakeReader
+    service: TabularDatasetService, fake_reader: FakeReader
 ) -> None:
     result = service.query(
         "hazard_exposure",
@@ -63,7 +63,16 @@ def test_query_builds_validated_query_and_delegates(
     assert result.applied_filters["crop"] == "maize"
 
 
-def test_unsupported_format_is_rejected(service: HazardExposureService) -> None:
+def test_service_is_dataset_agnostic(
+    service: TabularDatasetService, fake_reader: FakeReader
+) -> None:
+    service.query("phenology_seasonal_test", {"country": "eth", "variant": "plus_rain"})
+    assert fake_reader.last_query is not None
+    assert fake_reader.last_query.filters.partition_values == {"country": "ETH"}
+    assert fake_reader.last_query.filters.file_pattern_key == "plus_rain"
+
+
+def test_unsupported_format_is_rejected(service: TabularDatasetService) -> None:
     with pytest.raises(UnsupportedFormatError) as error:
         service.query(
             "hazard_exposure", {"country": "KEN", "period": "historic"}, output_format="xlsx"
@@ -72,7 +81,7 @@ def test_unsupported_format_is_rejected(service: HazardExposureService) -> None:
 
 
 @pytest.mark.parametrize(("limit", "offset"), [(0, 0), (101, 0), (10, -1)])
-def test_pagination_bounds(service: HazardExposureService, limit: int, offset: int) -> None:
+def test_pagination_bounds(service: TabularDatasetService, limit: int, offset: int) -> None:
     with pytest.raises(InvalidPaginationError):
         service.query(
             "hazard_exposure", {"country": "KEN", "period": "historic"}, limit=limit, offset=offset

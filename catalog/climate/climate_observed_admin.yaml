@@ -1,0 +1,78 @@
+# Observed climate (CHIRPS precipitation, CHIRTS temperature, ERA5) summarised by
+# administrative unit. Two aggregations live in sibling folders (monthly and seasonal
+# periods) and the administrative level is encoded in the file name.
+id: climate_observed_admin
+name: Observed climate by administrative unit
+domain: climate
+description: >-
+  Monthly and seasonal statistics of observed precipitation (PTOT), temperature (TAVG,
+  TMAX, TMIN) and drought indices (SPEI 1-24 months) from CHIRPS, CHIRTS and ERA5,
+  summarised (mean and standard deviation) by country and first sub-national unit for
+  1980 onwards.
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=climate/type=observational/source=chirps-chirts-era5/region=africa/processing={processing}/{file}"
+  file_patterns:
+    "0": "variable=adm0_obs.parquet"
+    "1": "variable=adm1_obs.parquet"
+  default_file_pattern: "0"
+  discover_partitions: true
+partitions:
+  - name: processing
+    description: Temporal aggregation of the observations.
+    allowed_values: [admin-monthly, admin-periods]
+filters:
+  - name: country
+    source: column
+    target: iso3
+    required: true
+    case_insensitive: true
+    description: ISO 3166-1 alpha-3 country code.
+    example: KEN
+    allowed_values: [AGO, BDI, BEN, BFA, BWA, CAF, CIV, CMR, COD, COG, COM, DJI, DZA, EGY, ERI, ESH, ETH, GAB, GHA, GIN, GMB, GNB, GNQ, KEN, LBR, LBY, LSO, MAR, MDG, MLI, MOZ, MRT, MWI, NAM, NER, NGA, RWA, SDN, SEN, SLE, SOM, SSD, STP, SWZ, SYC, TCD, TGO, TUN, TZA, UGA, ZAF, ZMB, ZWE]
+  - name: aggregation
+    source: partition
+    target: processing
+    default: admin-monthly
+    description: Temporal aggregation, calendar months or seasonal periods.
+    allowed_values: [admin-monthly, admin-periods]
+  - name: admin_level
+    source: file_pattern
+    default: "0"
+    description: "Administrative level of the records: 0 (country) or 1 (first sub-national unit)."
+    allowed_values: ["0", "1"]
+  - name: variable
+    source: column
+    target: variable
+    description: Climate variable or drought index.
+    example: PTOT
+    allowed_values: [PTOT, TAVG, TMAX, TMIN, SPEI-01, SPEI-03, SPEI-06, SPEI-12, SPEI-24]
+  - name: year
+    source: column
+    target: year
+    description: Calendar year (1980 onwards).
+    example: "2020"
+  - name: month
+    source: column
+    target: month
+    description: Calendar month (1-12), only for the admin-monthly aggregation.
+    allowed_values: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]
+  - name: period
+    source: column
+    target: period
+    description: Three-month season or annual, only for the admin-periods aggregation.
+    allowed_values: [annual, JFM, FMA, MAM, AMJ, MJJ, JJA, JAS, ASO, SON, OND, NDJ, DJF]
+response_fields:
+  - { name: iso3, type: string, description: ISO 3166-1 alpha-3 country code. }
+  - { name: admin0_name, type: string, description: Country name. }
+  - { name: admin1_name, type: string, description: First sub-national unit name (null at level 0). }
+  - { name: gaul0_code, type: integer, description: GAUL code of the country. }
+  - { name: gaul1_code, type: integer, description: GAUL code of the admin1 unit. }
+  - { name: year, type: integer, description: Calendar year. }
+  - { name: month, type: integer, description: Calendar month (monthly aggregation only). }
+  - { name: period, type: string, description: Season (periods aggregation only). }
+  - { name: variable, type: string, description: Climate variable or index. }
+  - { name: value_mean, type: number, description: Spatial mean of the variable over the unit. }
+  - { name: value_sd, type: number, description: Spatial standard deviation over the unit. }
+order_by: [iso3, admin1_name, variable, year, month, period]

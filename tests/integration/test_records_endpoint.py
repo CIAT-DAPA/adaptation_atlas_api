@@ -1,4 +1,4 @@
-"""Integration tests of HU-001 through the HTTP layer (acceptance criteria AC-01..AC-11)."""
+"""Integration tests of HU-001 through the generic records endpoint (AC-01..AC-11)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import io
 
 from fastapi.testclient import TestClient
 
-URL = "/api/v1/hazard-exposure/hazard_exposure"
+URL = "/api/v1/datasets/hazard_exposure/records"
 
 
 def test_ac01_successful_query_returns_expected_fields(client: TestClient) -> None:
@@ -114,7 +114,7 @@ def test_ac09_no_matching_records_is_a_successful_empty_result(client: TestClien
 
 def test_ac11_unknown_dataset_returns_404(client: TestClient) -> None:
     response = client.get(
-        "/api/v1/hazard-exposure/not_a_dataset", params={"country": "KEN", "period": "historic"}
+        "/api/v1/datasets/not_a_dataset/records", params={"country": "KEN", "period": "historic"}
     )
     assert response.status_code == 404
     assert response.json()["code"] == "dataset_not_found"

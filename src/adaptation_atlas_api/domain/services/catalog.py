@@ -45,13 +45,22 @@ class CatalogService:
         self._catalog = catalog
         self._partition_index = partition_index
 
-    def list_datasets(self) -> list[DatasetDefinition]:
-        """Return every registered dataset.
+    def list_datasets(self, domain: str | None = None) -> list[DatasetDefinition]:
+        """Return the registered datasets, optionally restricted to one domain.
+
+        Args:
+            domain: Thematic domain to filter by (case insensitive), or ``None``.
 
         Returns:
             Dataset definitions sorted by identifier.
         """
-        return self._catalog.list_all()
+        datasets = self._catalog.list_all()
+
+        # Without a domain filter the whole catalog is returned.
+        if domain is None or not domain.strip():
+            return datasets
+        wanted = domain.strip().lower()
+        return [dataset for dataset in datasets if dataset.domain.lower() == wanted]
 
     def get_dataset(self, dataset_id: str) -> DatasetDefinition:
         """Return the dataset registered under ``dataset_id``.

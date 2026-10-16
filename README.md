@@ -24,10 +24,18 @@ enforced with `import-linter`.
 
 ### Dataset catalog
 
-Every published dataset is described by one YAML file in `catalog/`. The file declares the
-storage path template (with Hive partition placeholders), the accepted filters with their
-controlled vocabularies, the fields returned in every record and the sort order used for
-stable pagination. Adding a dataset means adding a YAML file, not code.
+Every published dataset is described by one YAML file under `catalog/<domain>/`. The file
+declares the storage path template (with Hive partition placeholders, also usable inside
+file names such as `{country}_seasonal-phenology.parquet`), the accepted filters with their
+controlled vocabularies, the fields returned in every record (or none, to return every
+source column) and the sort order used for stable pagination. Adding a dataset means adding
+a YAML file, not code: every tabular dataset is served by the same generic endpoint.
+
+To inspect a new dataset before registering it (schema, row count, distinct values):
+
+```bash
+uv run python scripts/inspect_dataset.py "domain=climate/type=observational/" --output inspection.json
+```
 
 ## Requirements
 
@@ -72,21 +80,39 @@ Interactive documentation: <http://localhost:8000/docs> (Swagger UI) and
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/health` | Service status. |
-| GET | `/api/v1/datasets` | List published datasets. |
+| GET | `/api/v1/datasets?domain=` | List published datasets, optionally by domain. |
 | GET | `/api/v1/datasets/{dataset_id}` | Filters, valid values, fields and available partition combinations. |
-| GET | `/api/v1/hazard-exposure/{dataset_id}` | HU-001: hazard exposure records for a territory. |
+| GET | `/api/v1/datasets/{dataset_id}/records` | Records of any tabular dataset (HU-001 hazard exposure and all others). |
 
-### HU-001 example
+### Registered datasets
+
+| Domain | Dataset ids |
+|--------|-------------|
+| hazard_exposure | `hazard_exposure` |
+| climate | `climate_observed_admin`, `climate_hazard_change`, `climate_season_ensemble` |
+| exposure | `exposure_crop_livestock`, `exposure_population_worldpop`, `exposure_population_kenya_census`, `exposure_population_kenya_projections`, `exposure_kenya_flood_intersect` |
+| impacts | `impacts_pest_disease`, `impacts_gyga_yield` |
+| phenology | `phenology_seasonal` |
+| socioeconomic | `socioeconomic_landuse_fao`, `socioeconomic_gdp_sector`, `socioeconomic_poverty_rates`, `socioeconomic_faostat`, `socioeconomic_acled_conflicts` |
+
+Error code `filter_not_applicable` (422) is returned when a registered filter targets a
+column that does not exist in the files selected by the other filters (for example
+`severity` on the precipitation-change tables of `climate_hazard_change`).
+
+### Example (HU-001, dataset `hazard_exposure`)
 
 ```bash
+# Discover the filters and their valid values
+curl "http://localhost:8000/api/v1/datasets/hazard_exposure"
+
 # Maize exposure in Kenya, historic period, first sub-national level
-curl "http://localhost:8000/api/v1/hazard-exposure/hazard_exposure?country=KEN&period=historic&crop=maize&admin_level=1"
+curl "http://localhost:8000/api/v1/datasets/hazard_exposure/records?country=KEN&period=historic&crop=maize&admin_level=1"
 
 # Same records as CSV
-curl -o kenya_maize.csv "http://localhost:8000/api/v1/hazard-exposure/hazard_exposure?country=KEN&period=historic&crop=maize&admin_level=1&format=csv"
+curl -o kenya_maize.csv "http://localhost:8000/api/v1/datasets/hazard_exposure/records?country=KEN&period=historic&crop=maize&admin_level=1&format=csv"
 
 # Projected exposure from the NEX-GDDP ensemble mean, SSP2-4.5, 2041-2060
-curl "http://localhost:8000/api/v1/hazard-exposure/hazard_exposure?country=ETH&period=2041-2060&scenario=ssp245&source=nex-gddp-cmip6&variable=vop_nominal-usd21&season_type=jagermeyr&model=ENSEMBLEmean&severity=moderate&crop=wheat"
+curl "http://localhost:8000/api/v1/datasets/hazard_exposure/records?country=ETH&period=2041-2060&scenario=ssp245&source=nex-gddp-cmip6&variable=vop_nominal-usd21&season_type=jagermeyr&model=ENSEMBLEmean&severity=moderate&crop=wheat"
 ```
 
 Error responses share one schema:

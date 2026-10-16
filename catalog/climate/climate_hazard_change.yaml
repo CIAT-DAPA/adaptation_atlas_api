@@ -1,0 +1,77 @@
+# Hazard indicators derived from NEX-GDDP-CMIP6 projections: hazard frequency, share of
+# area under heat stress (NTx, THI) and precipitation change, per GCM or as ensemble
+# statistics. Every indicator is a separate file with its own columns, so fields are
+# returned automatically; use GET /datasets/climate_hazard_change to list the filters.
+id: climate_hazard_change
+name: Projected hazard change indicators (NEX-GDDP-CMIP6)
+domain: climate
+description: >-
+  Annual hazard indicators by administrative unit from 18 NEX-GDDP-CMIP6 models and their
+  ensemble: frequency of drought/wet hazards, percentage of area above heat thresholds for
+  crops (NTx35, NTx40) and cattle (THI), and precipitation change or difference versus the
+  historical period, for SSP1-2.6, SSP2-4.5, SSP3-7.0 and SSP5-8.5.
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=climate/type=hazard-indices/source=nex-gddp-cmip6/region=africa/processing=hazard-change/timeframe=annual/{file}"
+  file_patterns:
+    haz_freq_by_model: "variable=haz_freq.parquet"
+    haz_freq_ensemble: "variable=haz_freq_ensemble.parquet"
+    ntx_perc_area_by_model: "variable=ntx_perc_area_by_model.parquet"
+    ntx_perc_area_ensemble: "variable=ntx_perc_area_ensemble.parquet"
+    ptot_change_by_model: "variable=ptot_change_by_model.parquet"
+    ptot_change_ensemble: "variable=ptot_change_ensemble.parquet"
+    ptot_diff_by_model: "variable=ptot_diff_by_model.parquet"
+    ptot_diff_ensemble: "variable=ptot_diff_ensemble.parquet"
+    thi_perc_area_by_model: "variable=thi_perc_area_by_model.parquet"
+    thi_perc_area_ensemble: "variable=thi_perc_area_ensemble.parquet"
+  default_file_pattern: haz_freq_ensemble
+  discover_partitions: true
+filters:
+  - name: country
+    source: column
+    target: iso3
+    required: true
+    case_insensitive: true
+    description: ISO 3166-1 alpha-3 country code.
+    example: KEN
+    allowed_values: [AGO, BDI, BEN, BFA, BWA, CAF, CIV, CMR, COD, COG, COM, CPV, DJI, DZA, EGY, ERI, ESH, ETH, GAB, GHA, GIN, GMB, GNB, GNQ, KEN, LBR, LBY, LSO, MAR, MDG, MLI, MOZ, MRT, MUS, MWI, NAM, NER, NGA, RWA, SDN, SEN, SLE, SOM, SSD, STP, SWZ, SYC, TCD, TGO, TUN, TZA, UGA, ZAF, ZMB, ZWE]
+  - name: indicator
+    source: file_pattern
+    required: true
+    description: Hazard indicator table (per model or ensemble statistics).
+    example: haz_freq_ensemble
+    allowed_values: [haz_freq_by_model, haz_freq_ensemble, ntx_perc_area_by_model, ntx_perc_area_ensemble, ptot_change_by_model, ptot_change_ensemble, ptot_diff_by_model, ptot_diff_ensemble, thi_perc_area_by_model, thi_perc_area_ensemble]
+  - name: scenario
+    source: column
+    target: scenario
+    description: Emissions scenario.
+    example: ssp245
+    allowed_values: [historic, ssp126, ssp245, ssp370, ssp585]
+  - name: model
+    source: column
+    target: model
+    description: Climate model (per-model indicators only).
+    allowed_values: [ACCESS-CM2, ACCESS-ESM1-5, CMCC-ESM2, CanESM5, EC-Earth3, EC-Earth3-Veg-LR, GFDL-ESM4, INM-CM4-8, INM-CM5-0, IPSL-CM6A-LR, KACE-1-0-G, MIROC6, MPI-ESM1-2-HR, MPI-ESM1-2-LR, MRI-ESM2-0, NorESM2-LM, NorESM2-MM, TaiESM1]
+  - name: severity
+    source: column
+    target: severity
+    description: Hazard severity threshold (not available for precipitation change).
+    allowed_values: [severe, extreme]
+  - name: hazard
+    source: column
+    target: hazard
+    description: Hazard index (NDWS, NDWL0, NTx35, NTx40, THI).
+    allowed_values: [NDWS, NDWL0, NTx35, NTx40, THI]
+  - name: direction
+    source: column
+    target: direction
+    description: Direction of precipitation change (ptot_change tables only).
+    allowed_values: [increase_5, decrease_5]
+  - name: admin_level
+    source: derived
+    target: admin_level
+    description: "Administrative level of the records: 0 (country), 1 (first sub-national unit), 2 (second sub-national unit)."
+    example: "1"
+    allowed_values: ["0", "1", "2"]
+order_by: [iso3, admin1_name, admin2_name, scenario, hazard, severity]

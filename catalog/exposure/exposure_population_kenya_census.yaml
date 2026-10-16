@@ -1,0 +1,45 @@
+# Kenya 2019 population and housing census (KNBS) at national, county and sub-county
+# level, plus county totals by age group and sex. Each table is one file.
+id: exposure_population_kenya_census
+name: Kenya population census 2019 (KNBS)
+domain: exposure
+description: >-
+  Population (total, male, female, intersex), households, land area and density from the
+  Kenya 2019 census at national, county (adm1) and sub-county (adm2) level, with a county
+  breakdown by age group and sex.
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=exposure/type=population/source=knbs-census-2019/region=kenya/processing=analysis-ready/level={level}/{file}"
+  file_patterns:
+    adm0: "population_knbs_census_adm0.parquet"
+    adm1: "population_knbs_census_adm1.parquet"
+    adm1_agesex: "population_knbs_census_adm1_agesex.parquet"
+    adm2: "population_knbs_census_adm2_knbs.parquet"
+  default_file_pattern: adm1
+  discover_partitions: true
+partitions:
+  - name: level
+    description: Administrative level folder.
+    allowed_values: [adm0, adm1, adm2]
+filters:
+  - name: table
+    source: file_pattern
+    default: adm1
+    description: Census table (national, county, county by age and sex, sub-county).
+    allowed_values: [adm0, adm1, adm1_agesex, adm2]
+  - name: county
+    source: column
+    target: adm1_name
+    description: County name (adm1 tables and sub-county table).
+    example: Nakuru
+  - name: sex
+    source: column
+    target: sex
+    description: Sex (age-sex table only).
+    allowed_values: [total, female, male]
+  - name: age_group
+    source: column
+    target: age_group
+    description: Five-year age group (age-sex table only), e.g. 0-4, 25-29.
+order_by: [adm1_name, age_group, sex]

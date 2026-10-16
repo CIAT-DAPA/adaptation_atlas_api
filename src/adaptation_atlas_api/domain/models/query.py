@@ -48,6 +48,8 @@ class ValidatedFilters:
         derived_predicates: Conditions produced by derived rules (e.g. ``admin_level``).
         file_pattern_key: Key of ``storage.file_patterns`` selecting the files to read.
         applied: Public filter name -> canonical value, for response metadata.
+        filter_names_by_column: Column name -> public filter name, used to report errors
+            with the parameter the client actually sent.
     """
 
     partition_values: dict[str, str] = field(default_factory=dict)
@@ -55,6 +57,7 @@ class ValidatedFilters:
     derived_predicates: list[Predicate] = field(default_factory=list)
     file_pattern_key: str = "default"
     applied: dict[str, str] = field(default_factory=dict)
+    filter_names_by_column: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -13,6 +13,29 @@ from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+def extract_placeholders(template: str) -> list[str]:
+    """Extract the ``{name}`` placeholders used in a template string.
+
+    Args:
+        template: Path or file name template.
+
+    Returns:
+        Placeholder names in order of appearance, without braces.
+    """
+    placeholders: list[str] = []
+    start = template.find("{")
+
+    # Walk the template collecting every ``{name}`` segment.
+    while start != -1:
+        end = template.find("}", start)
+        # An opening brace without a closing one ends the scan.
+        if end == -1:
+            break
+        placeholders.append(template[start + 1 : end])
+        start = template.find("{", end)
+    return placeholders
+
+
 class DatasetType(str, Enum):
     """Kind of product exposed by a dataset."""
 
@@ -187,12 +210,16 @@ class DatasetDefinition(BaseModel):
         id: Public identifier used in URLs.
         name: Human readable title.
         description: Longer description shown in the catalog endpoints.
+        domain: Thematic domain the dataset belongs to (climate, exposure, impacts...).
         type: Dataset kind (tabular or raster).
         reader: Key of the adapter able to read the dataset (e.g. ``duckdb_parquet``).
         storage: Layout of the files in the storage backend.
         partitions: Hive partition keys used in the path template.
         filters: Query parameters accepted by the dataset.
-        response_fields: Fields returned for each record.
+        response_fields: Fields returned for each record. When empty, every column found
+            in the source files is returned with its native type.
+        excluded_columns: Source columns never returned when fields are automatic (e.g.
+            geometry blobs that cannot be serialized to JSON or CSV).
         order_by: Public field names used to sort results so pagination is stable.
         output_formats: Export formats supported by the dataset.
         metadata: Free-form extra metadata (e.g. loaded from sidecar files).
@@ -203,12 +230,14 @@ class DatasetDefinition(BaseModel):
     id: str
     name: str
     description: str = ""
+    domain: str = ""
     type: DatasetType = DatasetType.TABULAR
     reader: str = "duckdb_parquet"
     storage: StorageDefinition
     partitions: list[PartitionDefinition] = Field(default_factory=list)
     filters: list[FilterDefinition] = Field(default_factory=list)
     response_fields: list[ResponseFieldDefinition] = Field(default_factory=list)
+    excluded_columns: list[str] = Field(default_factory=list)
     order_by: list[str] = Field(default_factory=list)
     output_formats: list[str] = Field(default_factory=lambda: ["json", "csv"])
     metadata: dict[str, object] = Field(default_factory=dict)
@@ -258,12 +287,23 @@ class DatasetDefinition(BaseModel):
                     f"path_template placeholder '{{{placeholder}}}' is not a declared partition"
                 )
 
-        # Sorting can only use fields that are part of the response.
-        field_names = {item.name for item in self.response_fields}
-        for order_field in self.order_by:
-            # An unknown sort field would make the query fail at runtime.
-            if order_field not in field_names:
-                raise ValueError(f"order_by field '{order_field}' is not a response field")
+        # Placeholders inside file patterns must also be declared partitions.
+        for key, pattern in self.storage.file_patterns.items():
+            for placeholder in extract_placeholders(pattern):
+                # The file placeholder cannot be nested inside a file pattern.
+                if placeholder == "file" or placeholder not in partition_names:
+                    raise ValueError(
+                        f"file pattern '{key}' placeholder '{{{placeholder}}}' is not a "
+                        "declared partition"
+                    )
+
+        # Sorting can only use fields that are part of an explicit response definition.
+        if self.response_fields:
+            field_names = {item.name for item in self.response_fields}
+            for order_field in self.order_by:
+                # An unknown sort field would make the query fail at runtime.
+                if order_field not in field_names:
+                    raise ValueError(f"order_by field '{order_field}' is not a response field")
         return self
 
     def template_placeholders(self) -> list[str]:
@@ -272,19 +312,16 @@ class DatasetDefinition(BaseModel):
         Returns:
             Placeholder names in order of appearance, without braces.
         """
-        placeholders: list[str] = []
-        template = self.storage.path_template
-        start = template.find("{")
+        return extract_placeholders(self.storage.path_template)
 
-        # Walk the template collecting every ``{name}`` segment.
-        while start != -1:
-            end = template.find("}", start)
-            # An opening brace without a closing one ends the scan.
-            if end == -1:
-                break
-            placeholders.append(template[start + 1 : end])
-            start = template.find("{", end)
-        return placeholders
+    @property
+    def has_explicit_fields(self) -> bool:
+        """Tell whether the dataset declares its response fields explicitly.
+
+        Returns:
+            ``True`` when ``response_fields`` is not empty.
+        """
+        return bool(self.response_fields)
 
     def get_filter(self, name: str) -> FilterDefinition | None:
         """Look up a filter by its public name.

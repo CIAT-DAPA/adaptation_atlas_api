@@ -1,4 +1,8 @@
-"""HU-001: retrieve hazard exposure data for a selected territory."""
+"""Generic use case: retrieve records from any tabular dataset registered in the catalog.
+
+HU-001 (hazard exposure) is served by this service through the ``hazard_exposure``
+dataset; every other tabular dataset is served the same way, driven by its catalog entry.
+"""
 
 from __future__ import annotations
 
@@ -23,8 +27,8 @@ logger = logging.getLogger(__name__)
 CONTROL_PARAMETERS = {"format", "limit", "offset"}
 
 
-class HazardExposureService:
-    """Use case behind ``GET /hazard-exposure/{dataset_id}``.
+class TabularDatasetService:
+    """Use case behind ``GET /datasets/{dataset_id}/records``.
 
     The service resolves the dataset in the catalog, validates every supplied filter
     against the registered vocabularies, builds a :class:`TabularQuery` and delegates
@@ -150,7 +154,7 @@ class HazardExposureService:
             offset=offset,
         )
         logger.info(
-            "Executing hazard exposure query dataset=%s filters=%s limit=%s offset=%s",
+            "Executing tabular query dataset=%s filters=%s limit=%s offset=%s",
             dataset_id,
             query.filters.applied,
             query.limit,

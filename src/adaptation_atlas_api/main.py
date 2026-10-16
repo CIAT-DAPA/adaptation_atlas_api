@@ -30,8 +30,11 @@ OPENAPI_TAGS = [
         "description": "Discover published datasets, their filters and valid values.",
     },
     {
-        "name": "Hazard exposure",
-        "description": "HU-001 · Hazard exposure (hazard frequency × exposure) by territory.",
+        "name": "Records",
+        "description": (
+            "Query records of any tabular dataset by its identifier; filters are defined per "
+            "dataset in the catalog (HU-001 hazard exposure, climate, exposure, impacts...)."
+        ),
     },
 ]
 
