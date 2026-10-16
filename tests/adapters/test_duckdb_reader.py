@@ -33,11 +33,71 @@ def test_relative_path_uses_values_or_wildcards(hazard_dataset: DatasetDefinitio
     query = make_query(
         hazard_dataset, {"country": "KEN", "period": "historic", "severity": "severe"}
     )
-    path = DuckDBTabularReader.build_relative_path(query)
-    assert path == (
+    paths = DuckDBTabularReader.build_relative_paths(query)
+    assert paths == [
         "domain=hazard_exposure/source=atlas_cmip6/region=ssa/processing=hazard-risk-exposure/"
         "variable=*/period=*/model=*/severity=severe/int*.parquet"
+    ]
+
+
+def test_multiple_values_expand_to_several_paths(hazard_dataset: DatasetDefinition) -> None:
+    query = make_query(
+        hazard_dataset,
+        {
+            "country": "KEN",
+            "period": "historic",
+            "severity": "moderate,severe",
+            "hazard_type": "interaction,solo",
+        },
     )
+    paths = DuckDBTabularReader.build_relative_paths(query)
+    assert len(paths) == 4
+    assert paths[0].endswith("severity=moderate/int*.parquet")
+    assert paths[1].endswith("severity=severe/int*.parquet")
+    assert paths[2].endswith("severity=moderate/solo.parquet")
+
+
+def test_multiple_values_are_combined_with_or(
+    reader: DuckDBTabularReader, hazard_dataset: DatasetDefinition
+) -> None:
+    both = reader.query(
+        make_query(
+            hazard_dataset,
+            {"country": "KEN", "period": "historic", "crop": "maize,bean", "severity": "moderate"},
+        )
+    )
+    maize = reader.query(
+        make_query(
+            hazard_dataset,
+            {"country": "KEN", "period": "historic", "crop": "maize", "severity": "moderate"},
+        )
+    )
+    assert {row["crop"] for row in both.records} == {"maize", "bean"}
+    assert both.total_count == 2 * maize.total_count
+    # Several partition values read several files; several file types too.
+    files = reader.query(
+        make_query(
+            hazard_dataset,
+            {
+                "country": "KEN",
+                "period": "historic",
+                "severity": ["moderate", "severe"],
+                "hazard_type": ["interaction", "solo"],
+            },
+        )
+    )
+    assert files.source_files == 3
+    assert {row["severity"] for row in files.records} == {"moderate", "severe"}
+    # Several admin levels are OR-ed.
+    levels = reader.query(
+        make_query(hazard_dataset, {"country": "KEN", "period": "historic", "admin_level": "0,2"})
+    )
+    assert all(
+        (row["admin1_name"] is None and row["admin2_name"] is None) or row["admin2_name"]
+        for row in levels.records
+    )
+    assert any(row["admin2_name"] is None for row in levels.records)
+    assert any(row["admin2_name"] is not None for row in levels.records)
 
 
 def test_country_and_period_are_enforced(

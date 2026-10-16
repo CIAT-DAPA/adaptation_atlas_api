@@ -1,0 +1,50 @@
+# FAOSTAT production, trade and value of production by country, commodity and year
+# (1961-2024), mapped to Adaptation Atlas commodity names where applicable.
+id: socioeconomic_faostat
+name: FAOSTAT production and trade by country
+domain: socioeconomic
+description: >-
+  Production, yield, value of production (2015 international dollars and USD), import and
+  export quantities and values for more than 200 commodities by country and year since
+  1961, with the Adaptation Atlas commodity mapping.
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=socioeconomic/type=production/source=faostat/region=ssa/{file}"
+  file_patterns:
+    default: "variable=adm0_faostat.parquet"
+  default_file_pattern: default
+filters:
+  - name: country
+    source: column
+    target: iso3
+    required: true
+    case_insensitive: true
+    description: ISO 3166-1 alpha-3 country code.
+    example: KEN
+    allowed_values: [AGO, BDI, BEN, BFA, BWA, CAF, CIV, CMR, COD, COG, COM, CPV, DJI, DZA, EGY, ERI, ESH, ETH, GAB, GHA, GIN, GMB, GNB, GNQ, KEN, LBR, LBY, LSO, MAR, MDG, MLI, MOZ, MRT, MUS, MWI, NAM, NER, NGA, RWA, SDN, SEN, SLE, SOM, SSD, STP, SWZ, SYC, TCD, TGO, TUN, TZA, UGA, ZAF, ZMB, ZWE]
+  - name: variable
+    source: column
+    target: variable
+    description: FAOSTAT variable.
+    allowed_values: [production, yield, vop_intd15, vop_usd15, import_quantity, import_value, import_value_usd15, export_quantity, export_value, export_value_usd15]
+  - name: commodity_class
+    source: column
+    target: commodity_class
+    description: Commodity class.
+    allowed_values: [crop, livestock, byproduct]
+  - name: commodity
+    source: column
+    target: commodity
+    description: FAOSTAT commodity name (e.g. Maize (corn), Cassava, fresh).
+  - name: atlas_name
+    source: column
+    target: atlas_name
+    description: Adaptation Atlas commodity code (e.g. maiz, cass, cattle_meat).
+    example: maiz
+  - name: year
+    source: column
+    target: year
+    description: Year (1961-2024).
+    example: "2022"
+order_by: [iso3, commodity, variable, year]

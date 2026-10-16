@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from adaptation_atlas_api.api.deps import build_container
 from adaptation_atlas_api.api.errors import register_exception_handlers
@@ -29,8 +30,11 @@ OPENAPI_TAGS = [
         "description": "Discover published datasets, their filters and valid values.",
     },
     {
-        "name": "Hazard exposure",
-        "description": "HU-001 · Hazard exposure (hazard frequency × exposure) by territory.",
+        "name": "Records",
+        "description": (
+            "Query records of any tabular dataset by its identifier; filters are defined per "
+            "dataset in the catalog (HU-001 hazard exposure, climate, exposure, impacts...)."
+        ),
     },
 ]
 
@@ -90,6 +94,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     register_exception_handlers(app)
     app.include_router(v1_router, prefix=resolved_settings.api_prefix)
+
+    @app.get("/", include_in_schema=False)
+    async def root_redirect() -> RedirectResponse:
+        """Redirect the root path to the interactive API documentation.
+
+        Returns:
+            A temporary redirect to the Swagger UI page.
+        """
+        return RedirectResponse(url="/docs", status_code=307)
+
     return app
 
 

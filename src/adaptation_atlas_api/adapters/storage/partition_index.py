@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import fnmatch
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, field
 
-from adaptation_atlas_api.domain.models.dataset import DatasetDefinition
+from adaptation_atlas_api.domain.models.dataset import DatasetDefinition, extract_placeholders
 from adaptation_atlas_api.ports.partition_index import PartitionIndex
 from adaptation_atlas_api.ports.storage import Storage
 
@@ -119,10 +119,13 @@ class StoragePartitionIndex(PartitionIndex):
                 if separator and name in partition_names:
                     values[name] = value
 
-            pattern_key = self._match_pattern(dataset, file_name)
+            match = self._match_pattern(dataset, file_name)
             # Files that match no registered pattern are ignored.
-            if pattern_key is None:
+            if match is None:
                 continue
+            pattern_key, name_values = match
+            # Partition values embedded in the file name complement the folder ones.
+            values.update(name_values)
 
             identity = tuple(sorted(values.items()))
             combination = combinations.setdefault(identity, dict(values))
@@ -136,19 +139,57 @@ class StoragePartitionIndex(PartitionIndex):
         return [combinations[identity] for identity in sorted(combinations)]
 
     @staticmethod
-    def _match_pattern(dataset: DatasetDefinition, file_name: str) -> str | None:
-        """Find the file pattern key whose glob matches ``file_name``.
+    def _match_pattern(
+        dataset: DatasetDefinition, file_name: str
+    ) -> tuple[str, dict[str, str]] | None:
+        """Find the file pattern matching ``file_name`` and the partition values it embeds.
 
         Args:
             dataset: Dataset declaring the file patterns.
             file_name: Base name of the file.
 
         Returns:
-            The matching pattern key, or ``None`` when no pattern matches.
+            The matching pattern key and the ``{placeholder}`` values captured from the
+            name, or ``None`` when no pattern matches.
         """
         # Patterns are checked in catalog order so more specific ones can be listed first.
         for key, glob in dataset.storage.file_patterns.items():
-            # ``fnmatch`` implements the same glob semantics used by DuckDB for file names.
-            if fnmatch.fnmatch(file_name, glob):
-                return key
+            match = pattern_to_regex(glob).fullmatch(file_name)
+            # The first matching pattern wins.
+            if match is not None:
+                return key, {name: value for name, value in match.groupdict().items() if value}
         return None
+
+
+def pattern_to_regex(glob: str) -> re.Pattern[str]:
+    """Translate a file pattern with ``*``, ``?`` and ``{placeholder}`` into a regex.
+
+    Args:
+        glob: File pattern as declared in the catalog.
+
+    Returns:
+        A compiled regular expression with one named group per placeholder.
+    """
+    placeholders = extract_placeholders(glob)
+    pieces: list[str] = []
+    rest = glob
+
+    # Split the pattern on its placeholders, escaping the literal pieces in between.
+    for placeholder in placeholders:
+        literal, _, rest = rest.partition("{" + placeholder + "}")
+        pieces.append(_glob_to_regex(literal))
+        pieces.append(f"(?P<{placeholder}>[^/]+)")
+    pieces.append(_glob_to_regex(rest))
+    return re.compile("".join(pieces))
+
+
+def _glob_to_regex(literal: str) -> str:
+    """Escape a glob fragment, translating ``*`` and ``?`` wildcards.
+
+    Args:
+        literal: Glob fragment without placeholders.
+
+    Returns:
+        The regex fragment.
+    """
+    return re.escape(literal).replace(r"\*", "[^/]*").replace(r"\?", "[^/]")

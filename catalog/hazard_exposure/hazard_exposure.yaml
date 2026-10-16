@@ -11,6 +11,7 @@
 # --------------------------------------------------------------------------- #
 id: hazard_exposure
 name: Hazard exposure by administrative unit
+domain: hazard_exposure
 description: >-
   Hazard occurrence frequency (0-1) multiplied by the exposed value of production,
   summarised by country, first and second sub-national administrative units for

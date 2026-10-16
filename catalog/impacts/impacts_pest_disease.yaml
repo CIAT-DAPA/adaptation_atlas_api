@@ -1,0 +1,57 @@
+# Projected pest and disease impacts (Rohr lab, University of Notre Dame): change in
+# thermal performance of pests and projected yield impact per crop, by administrative unit.
+id: impacts_pest_disease
+name: Projected pest and disease impacts
+domain: impacts
+description: >-
+  Projected change in pest thermal performance and in crop yields (maize, rice, soy, wheat)
+  due to pests and diseases by 2040 and 2060 under SSP2-4.5 and SSP5-8.5, for individual
+  climate models and the ensemble, by country and sub-national units.
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=impacts/type=pest-disease/source=rohr_notre-dame/region=africa/processing=aggregated/{file}"
+  file_patterns:
+    thermal_performance: "pest-tcp-perf_pct.parquet"
+    yield_impact: "pest-yield-impact_pct.parquet"
+  default_file_pattern: yield_impact
+filters:
+  - name: country
+    source: column
+    target: iso3
+    required: true
+    case_insensitive: true
+    description: ISO 3166-1 alpha-3 country code.
+    example: KEN
+    allowed_values: [AGO, BDI, BEN, BFA, BWA, CAF, CIV, CMR, COD, COG, COM, CPV, DJI, DZA, EGY, ERI, ESH, ETH, GAB, GHA, GIN, GMB, GNB, GNQ, KEN, LBR, LBY, LSO, MAR, MDG, MLI, MOZ, MRT, MUS, MWI, NAM, NER, NGA, RWA, SDN, SEN, SLE, SOM, SSD, STP, SWZ, SYC, TCD, TGO, TUN, TZA, UGA, ZAF, ZMB, ZWE]
+  - name: indicator
+    source: file_pattern
+    default: yield_impact
+    description: Pest thermal performance change or crop yield impact.
+    allowed_values: [thermal_performance, yield_impact]
+  - name: scenario
+    source: column
+    target: scenario
+    description: Emissions scenario.
+    allowed_values: [ssp245, ssp585]
+  - name: model
+    source: column
+    target: model
+    description: Climate model or ensemble statistic (names as published by the source).
+    allowed_values: [ENSEMBLEmean, ENSEMBLEsd, ACCESS-ESM0-5, EC-Earth2, INM-CM4-0, MPI-ESM0-2-HR, MRI-ESM1-0]
+  - name: time
+    source: column
+    target: time
+    description: Projection horizon.
+    allowed_values: ["2040", "2060"]
+  - name: crop
+    source: column
+    target: crop
+    description: Crop (yield impact only).
+    allowed_values: [maize, rice, soy, wheat]
+  - name: admin_level
+    source: derived
+    target: admin_level
+    description: "Administrative level of the records: 0 (country), 1 (first sub-national unit), 2 (second sub-national unit)."
+    allowed_values: ["0", "1", "2"]
+order_by: [iso3, admin1_name, admin2_name, scenario, model, time, crop]

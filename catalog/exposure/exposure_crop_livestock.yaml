@@ -1,0 +1,85 @@
+# Crop and livestock exposure (SPAM 2020 + GLW4 2020) harmonised by the Atlas: harvested
+# and physical area, production, number of animals and value of production, by
+# administrative unit. Nine tables: the full set and value-of-production subsets, at the
+# native resolution or aggregated to 0.05 and 0.25 degrees.
+id: exposure_crop_livestock
+name: Crop and livestock exposure (SPAM 2020 / GLW4)
+domain: exposure
+description: >-
+  Harvested area, physical area, production, animal numbers and value of production of
+  54 crops and livestock commodities by country and sub-national units, harmonised by the
+  Adaptation Atlas from SPAM 2020 and GLW4 2020.
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=exposure/type=combined/source=glw4-2020_spam2020AA/region=ssa/processing=atlas-harmonized/{file}"
+  file_patterns:
+    all: "variable=crop-livestock_all.parquet"
+    all_res05: "variable=crop-livestock_all_res-05.parquet"
+    all_res25: "variable=crop-livestock_all_res-25.parquet"
+    vop_intld15: "variable=vop_intld15-2021.parquet"
+    vop_intld15_res05: "variable=vop_intld15-2021_res-05.parquet"
+    vop_intld15_res25: "variable=vop_intld15-2021_res-25.parquet"
+    vop_usd: "variable=vop_nominal-usd-2021.parquet"
+    vop_usd_res05: "variable=vop_nominal-usd-2021_res-05.parquet"
+    vop_usd_res25: "variable=vop_nominal-usd-2021_res-25.parquet"
+  default_file_pattern: all
+  discover_partitions: true
+  metadata_sidecar: true
+filters:
+  - name: country
+    source: column
+    target: iso3
+    required: true
+    case_insensitive: true
+    description: ISO 3166-1 alpha-3 country code.
+    example: KEN
+    allowed_values: [AGO, BDI, BEN, BFA, BWA, CAF, CIV, CMR, COD, COG, COM, CPV, DJI, DZA, EGY, ERI, ESH, ETH, GAB, GHA, GIN, GMB, GNB, GNQ, KEN, LBR, LBY, LSO, MAR, MDG, MLI, MOZ, MRT, MUS, MWI, NAM, NER, NGA, RWA, SDN, SEN, SLE, SOM, SSD, STP, SWZ, SYC, TCD, TGO, TUN, TZA, UGA, ZAF, ZMB, ZWE]
+  - name: table
+    source: file_pattern
+    default: all
+    description: Table (all exposure variables or value of production in 2015 international dollars / nominal 2021 USD), optionally aggregated to 0.05 or 0.25 degree grids.
+    allowed_values: [all, all_res05, all_res25, vop_intld15, vop_intld15_res05, vop_intld15_res25, vop_usd, vop_usd_res05, vop_usd_res25]
+  - name: crop
+    source: column
+    target: crop
+    description: Crop or livestock commodity.
+    example: maize
+    allowed_values: [arabica-coffee, banana, barley, bean, cassava, cattle-highland, cattle-tropical, chickpea, cocoa, coconut, cotton, cowpea, goats-highland, goats-tropical, groundnut, lentil, maize, oilpalm, other-cereals, other-fibre-crops, other-oil-crops, other-pulses, other-roots, pearl-millet, pigeonpea, pigs-highland, pigs-tropical, plantain, potato, poultry-highland, poultry-tropical, rapeseed, rest-of-crops, rice, robusta-coffee, sesameseed, sheep-highland, sheep-tropical, small-millet, sorghum, soybean, sugarbeet, sugarcane, sunflower, sweet-potato, tea, temperate-fruit, tobacco, total-highland, total-tropical, tropical-fruit, vegetables, wheat, yams]
+  - name: exposure
+    source: column
+    target: exposure
+    description: Exposure variable.
+    allowed_values: [harv-area, phys-area, prod, number, vop]
+  - name: unit
+    source: column
+    target: unit
+    description: Unit of the exposure variable.
+    allowed_values: [ha, t, number, intld15, intld15-2021, usd, nominal-usd-2021]
+  - name: tech
+    source: column
+    target: tech
+    description: Production technology (crops only).
+    allowed_values: [all, irr, rf-all, rf-highinput, rf-lowinput, rf-subsistence]
+  - name: admin_level
+    source: derived
+    target: admin_level
+    description: "Administrative level of the records: 0 (country), 1 (first sub-national unit), 2 (second sub-national unit)."
+    example: "1"
+    allowed_values: ["0", "1", "2"]
+response_fields:
+  - { name: iso3, type: string, description: ISO 3166-1 alpha-3 country code. }
+  - { name: admin0_name, type: string, description: Country name. }
+  - { name: admin1_name, type: string, description: First sub-national unit name. }
+  - { name: admin2_name, type: string, description: Second sub-national unit name. }
+  - { name: gaul0_code, type: integer, description: GAUL code of the country. }
+  - { name: gaul1_code, type: integer, description: GAUL code of the admin1 unit. }
+  - { name: gaul2_code, type: integer, description: GAUL code of the admin2 unit. }
+  - { name: crop, type: string, description: Crop or livestock commodity. }
+  - { name: exposure, type: string, description: Exposure variable. }
+  - { name: tech, type: string, description: Production technology. }
+  - { name: unit, type: string, description: Unit. }
+  - { name: unit_full, type: string, description: Full unit name. }
+  - { name: stat, type: string, description: Aggregation statistic. }
+  - { name: value, type: number, description: Exposure value. }
+order_by: [iso3, admin1_name, admin2_name, crop, exposure, tech]

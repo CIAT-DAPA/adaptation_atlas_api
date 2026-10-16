@@ -1,4 +1,4 @@
-"""Integration tests of HU-001 through the HTTP layer (acceptance criteria AC-01..AC-11)."""
+"""Integration tests of HU-001 through the generic records endpoint (AC-01..AC-11)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import io
 
 from fastapi.testclient import TestClient
 
-URL = "/api/v1/hazard-exposure/hazard_exposure"
+URL = "/api/v1/datasets/hazard_exposure/records"
 
 
 def test_ac01_successful_query_returns_expected_fields(client: TestClient) -> None:
@@ -114,7 +114,7 @@ def test_ac09_no_matching_records_is_a_successful_empty_result(client: TestClien
 
 def test_ac11_unknown_dataset_returns_404(client: TestClient) -> None:
     response = client.get(
-        "/api/v1/hazard-exposure/not_a_dataset", params={"country": "KEN", "period": "historic"}
+        "/api/v1/datasets/not_a_dataset/records", params={"country": "KEN", "period": "historic"}
     )
     assert response.status_code == 404
     assert response.json()["code"] == "dataset_not_found"
@@ -167,3 +167,98 @@ def test_nex_source_query(client: TestClient) -> None:
     assert data
     assert data[0]["gaul2_code"] is not None
     assert data[0]["season_type"] == "jagermeyr"
+
+
+def test_filters_json_parameter(client: TestClient) -> None:
+    response = client.get(
+        URL, params={"filters": '{"country": "ken", "period": "historic", "crop": "maize"}'}
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["metadata"]["filters"]["country"] == "KEN"
+    assert {row["crop"] for row in payload["data"]} == {"maize"}
+
+
+def test_filters_json_numbers_and_mixing_with_query_parameters(client: TestClient) -> None:
+    response = client.get(
+        "/api/v1/datasets/climate_observed_admin/records",
+        params={"country": "KEN", "filters": '{"admin_level": 1, "year": 2020, "month": 2}'},
+    )
+    assert response.status_code == 200
+    assert all(row["month"] == 2 for row in response.json()["data"])
+
+
+def test_filters_json_invalid(client: TestClient) -> None:
+    response = client.get(URL, params={"filters": "{country: KEN"})
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_filters_json"
+    response = client.get(URL, params={"filters": '["KEN"]'})
+    assert response.json()["code"] == "invalid_filters_json"
+    response = client.get(URL, params={"filters": '{"country": {"a": "KEN"}}'})
+    assert response.json()["code"] == "invalid_filters_json"
+    response = client.get(URL, params={"filters": '{"country": [["KEN"]]}'})
+    assert response.json()["code"] == "invalid_filters_json"
+
+
+def test_filters_json_conflict(client: TestClient) -> None:
+    response = client.get(URL, params={"country": "KEN", "filters": '{"country": "ETH"}'})
+    assert response.status_code == 422
+    assert response.json()["code"] == "conflicting_filter"
+    assert response.json()["parameter"] == "country"
+    # Agreeing duplicates are accepted.
+    response = client.get(
+        URL, params={"country": "KEN", "filters": '{"country": "KEN", "period": "historic"}'}
+    )
+    assert response.status_code == 200
+
+
+def test_filters_json_still_validated_against_catalog(client: TestClient) -> None:
+    response = client.get(
+        URL, params={"filters": '{"country": "KEN", "period": "historic", "colour": "red"}'}
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "unsupported_filter"
+
+
+def test_multiple_values_in_every_form(client: TestClient) -> None:
+    expected = {"maize", "bean"}
+    base = {"country": "KEN", "period": "historic", "severity": "moderate"}
+    repeated = client.get(URL, params=[*base.items(), ("crop", "maize"), ("crop", "bean")])
+    comma = client.get(URL, params={**base, "crop": "maize,bean"})
+    as_json = client.get(
+        URL,
+        params={
+            "filters": (
+                '{"country":"KEN","period":"historic","severity":"moderate",'
+                '"crop":["maize","bean"]}'
+            )
+        },
+    )
+    for response in (repeated, comma, as_json):
+        assert response.status_code == 200
+        payload = response.json()
+        assert {row["crop"] for row in payload["data"]} == expected
+        assert payload["metadata"]["filters"]["crop"] == ["maize", "bean"]
+    assert repeated.json()["metadata"]["total_count"] == comma.json()["metadata"]["total_count"]
+
+
+def test_invalid_value_inside_list_is_reported(client: TestClient) -> None:
+    response = client.get(
+        URL, params={"country": "KEN", "period": "historic", "crop": "maize,mango"}
+    )
+    assert response.status_code == 422
+    assert response.json()["parameter"] == "crop"
+
+
+def test_list_conflict_between_json_and_query(client: TestClient) -> None:
+    response = client.get(
+        URL,
+        params={
+            "country": "KEN",
+            "period": "historic",
+            "crop": "maize",
+            "filters": '{"crop":["maize","bean"]}',
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "conflicting_filter"

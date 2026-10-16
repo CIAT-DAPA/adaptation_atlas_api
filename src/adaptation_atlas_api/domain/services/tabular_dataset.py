@@ -1,4 +1,8 @@
-"""HU-001: retrieve hazard exposure data for a selected territory."""
+"""Generic use case: retrieve records from any tabular dataset registered in the catalog.
+
+HU-001 (hazard exposure) is served by this service through the ``hazard_exposure``
+dataset; every other tabular dataset is served the same way, driven by its catalog entry.
+"""
 
 from __future__ import annotations
 
@@ -20,11 +24,11 @@ from adaptation_atlas_api.ports.tabular_reader import TabularReader
 logger = logging.getLogger(__name__)
 
 # Query parameters that control the response and are never dataset filters.
-CONTROL_PARAMETERS = {"format", "limit", "offset"}
+CONTROL_PARAMETERS = {"format", "limit", "offset", "filters"}
 
 
-class HazardExposureService:
-    """Use case behind ``GET /hazard-exposure/{dataset_id}``.
+class TabularDatasetService:
+    """Use case behind ``GET /datasets/{dataset_id}/records``.
 
     The service resolves the dataset in the catalog, validates every supplied filter
     against the registered vocabularies, builds a :class:`TabularQuery` and delegates
@@ -82,7 +86,7 @@ class HazardExposureService:
     def build_query(
         self,
         dataset_id: str,
-        raw_filters: Mapping[str, str | None],
+        raw_filters: Mapping[str, str | list[str] | None],
         *,
         output_format: str = "json",
         limit: int | None = None,
@@ -124,7 +128,7 @@ class HazardExposureService:
     def query(
         self,
         dataset_id: str,
-        raw_filters: Mapping[str, str | None],
+        raw_filters: Mapping[str, str | list[str] | None],
         *,
         output_format: str = "json",
         limit: int | None = None,
@@ -150,7 +154,7 @@ class HazardExposureService:
             offset=offset,
         )
         logger.info(
-            "Executing hazard exposure query dataset=%s filters=%s limit=%s offset=%s",
+            "Executing tabular query dataset=%s filters=%s limit=%s offset=%s",
             dataset_id,
             query.filters.applied,
             query.limit,

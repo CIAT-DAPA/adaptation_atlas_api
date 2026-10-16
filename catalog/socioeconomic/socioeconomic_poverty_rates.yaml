@@ -1,0 +1,40 @@
+# World Bank Global Subnational Atlas of Poverty 2023: share of population below the
+# international poverty lines by country and first sub-national unit.
+id: socioeconomic_poverty_rates
+name: Poverty rates by administrative unit (World Bank GSAP 2023)
+domain: socioeconomic
+description: >-
+  Share of the population living below 3.00, 4.20 and 8.30 US dollars per day (2021 PPP)
+  by country and first sub-national unit, from the World Bank Global Subnational Atlas
+  of Poverty 2023.
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=socioeconomic/type=economic/source=worldbank_gsap2023/region=africa/{file}"
+  file_patterns:
+    default: "variable=adm01_pov-rates.parquet"
+  default_file_pattern: default
+filters:
+  - name: country
+    source: column
+    target: iso3
+    required: false
+    case_insensitive: true
+    description: ISO 3166-1 alpha-3 country code.
+    example: KEN
+    allowed_values: [AGO, BDI, BEN, BFA, BWA, CAF, CIV, CMR, COD, COG, COM, CPV, DJI, DZA, EGY, ERI, ESH, ETH, GAB, GHA, GIN, GMB, GNB, GNQ, KEN, LBR, LBY, LSO, MAR, MDG, MLI, MOZ, MRT, MUS, MWI, NAM, NER, NGA, RWA, SDN, SEN, SLE, SOM, SSD, STP, SWZ, SYC, TCD, TGO, TUN, TZA, UGA, ZAF, ZMB, ZWE]
+  - name: admin_level
+    source: derived
+    target: admin_level
+    description: "Administrative level: 0 (country) or 1 (first sub-national unit)."
+    allowed_values: ["0", "1"]
+response_fields:
+  - { name: iso3, type: string, description: ISO 3166-1 alpha-3 country code. }
+  - { name: admin0_name, type: string, description: Country name. }
+  - { name: admin1_name, type: string, description: First sub-national unit name (null at level 0). }
+  - { name: gaul0_code, type: integer, description: GAUL code of the country. }
+  - { name: gaul1_code, type: integer, description: GAUL code of the admin1 unit. }
+  - { name: poor300_ln, type: number, description: Share below 3.00 USD/day. }
+  - { name: poor420_ln, type: number, description: Share below 4.20 USD/day. }
+  - { name: poor830_ln, type: number, description: Share below 8.30 USD/day. }
+order_by: [iso3, admin1_name]

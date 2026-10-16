@@ -1,0 +1,48 @@
+# Kenya population projections 2020-2045 (KNBS) at national and county level by age group
+# and sex, plus county totals.
+id: exposure_population_kenya_projections
+name: Kenya population projections 2020-2045 (KNBS)
+domain: exposure
+description: >-
+  Projected population of Kenya for 2020-2045 at national and county level by five-year
+  age group and sex, with yearly county totals.
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=exposure/type=population/source=knbs-projections-2020-2045/region=kenya/processing=analysis-ready/level={level}/{file}"
+  file_patterns:
+    adm0: "population_knbs_projections_adm0.parquet"
+    adm1: "population_knbs_projections_adm1.parquet"
+    adm1_totals: "population_knbs_projections_adm1_totals.parquet"
+  default_file_pattern: adm1_totals
+  discover_partitions: true
+partitions:
+  - name: level
+    description: Administrative level folder.
+    allowed_values: [adm0, adm1]
+filters:
+  - name: table
+    source: file_pattern
+    default: adm1_totals
+    description: Projection table (national by age/sex, county by age/sex, county totals).
+    allowed_values: [adm0, adm1, adm1_totals]
+  - name: county
+    source: column
+    target: adm1_name
+    description: County name (county tables only).
+    example: Nakuru
+  - name: year
+    source: column
+    target: year
+    description: Projection year (2020-2045).
+    example: "2030"
+  - name: sex
+    source: column
+    target: sex
+    description: Sex (age-sex tables only).
+    allowed_values: [total, female, male]
+  - name: age_group
+    source: column
+    target: age_group
+    description: Five-year age group (age-sex tables only), e.g. 0-4, 25-29.
+order_by: [adm1_name, year, age_group, sex]

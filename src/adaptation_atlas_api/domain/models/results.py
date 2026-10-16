@@ -17,7 +17,7 @@ class TabularResult:
         total_count: Total number of matching rows before pagination.
         limit: Page size applied to the query.
         offset: Number of rows skipped.
-        applied_filters: Public filter name -> canonical value actually applied.
+        applied_filters: Public filter name -> canonical value or values actually applied.
         source_files: Number of source files that matched the query.
     """
 
@@ -27,7 +27,7 @@ class TabularResult:
     total_count: int
     limit: int
     offset: int = 0
-    applied_filters: dict[str, str] = field(default_factory=dict)
+    applied_filters: dict[str, str | list[str]] = field(default_factory=dict)
     source_files: int = 0
 
     @property
@@ -55,7 +55,7 @@ class TabularResult:
         columns: list[str],
         limit: int,
         offset: int = 0,
-        applied_filters: dict[str, str] | None = None,
+        applied_filters: dict[str, str | list[str]] | None = None,
     ) -> TabularResult:
         """Build a successful empty result (no matching records).
 

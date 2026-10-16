@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, Path, Query
 
 from adaptation_atlas_api.api.deps import get_catalog_service
 from adaptation_atlas_api.api.schemas.catalog import DatasetDetail, DatasetSummary
@@ -17,20 +17,29 @@ router = APIRouter(prefix="/datasets", tags=["Catalog"])
     response_model=list[DatasetSummary],
     summary="List published datasets",
     description=(
-        "Returns every dataset registered in the catalog. Use the identifier of a dataset "
-        "in the data endpoints; no knowledge of the storage layout is required."
+        "Returns every dataset registered in the catalog, optionally restricted to one "
+        "thematic domain. Use the identifier of a dataset in "
+        "`GET /datasets/{dataset_id}/records`; no knowledge of the storage layout is required."
     ),
 )
-def list_datasets(service: CatalogService = Depends(get_catalog_service)) -> list[DatasetSummary]:
-    """List every registered dataset.
+def list_datasets(
+    domain: str | None = Query(
+        default=None,
+        description="Only return datasets of this domain (e.g. `climate`, `exposure`).",
+        examples=["climate"],
+    ),
+    service: CatalogService = Depends(get_catalog_service),
+) -> list[DatasetSummary]:
+    """List registered datasets, optionally filtered by domain.
 
     Args:
+        domain: Thematic domain to filter by, or ``None`` for every dataset.
         service: Catalog service.
 
     Returns:
         Dataset summaries sorted by identifier.
     """
-    return [DatasetSummary.from_domain(dataset) for dataset in service.list_datasets()]
+    return [DatasetSummary.from_domain(dataset) for dataset in service.list_datasets(domain=domain)]
 
 
 @router.get(
@@ -40,8 +49,9 @@ def list_datasets(service: CatalogService = Depends(get_catalog_service)) -> lis
     summary="Describe a dataset",
     description=(
         "Returns the filters accepted by the dataset with their valid values, the fields of "
-        "every record and, when partition discovery is enabled, the combinations of "
-        "variable, season type, model, severity and file type that actually exist in storage."
+        "every record and, when partition discovery is enabled, the partition combinations "
+        "that actually exist in storage. Use it to build queries for "
+        "`GET /datasets/{dataset_id}/records`."
     ),
 )
 def get_dataset(

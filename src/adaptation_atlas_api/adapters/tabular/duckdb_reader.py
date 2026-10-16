@@ -2,26 +2,45 @@
 
 The reader turns a :class:`TabularQuery` into a parameterized SQL statement:
 
-* the storage path is built from the dataset ``path_template``, replacing each
-  partition placeholder with the requested value or ``*`` when not filtered;
-* filters on columns are bound as query parameters (never interpolated);
+* the storage paths are built from the dataset ``path_template``, replacing each
+  partition placeholder with every requested value (or ``*`` when not filtered), and
+  expanded to the concrete files that exist;
+* filters on columns are bound as query parameters (never interpolated) and several
+  values of the same filter become an ``IN`` list;
 * ``hive_partitioning`` exposes the partition values as columns and
   ``union_by_name`` tolerates schema differences between files;
-* response fields missing from every matched file are returned as ``NULL``.
+* response fields missing from every matched file are returned as ``NULL``;
+* datasets without explicit response fields return every source column as is.
 """
 
 from __future__ import annotations
 
+import datetime as dt
+import itertools
 import logging
 import math
 import threading
+from decimal import Decimal
 from typing import Any
 
 import duckdb
 
-from adaptation_atlas_api.domain.exceptions import QueryExecutionError, SourceUnavailableError
-from adaptation_atlas_api.domain.models.dataset import DatasetDefinition, FieldType
-from adaptation_atlas_api.domain.models.query import Predicate, PredicateOperator, TabularQuery
+from adaptation_atlas_api.domain.exceptions import (
+    FilterNotApplicableError,
+    QueryExecutionError,
+    SourceUnavailableError,
+)
+from adaptation_atlas_api.domain.models.dataset import (
+    DatasetDefinition,
+    FieldType,
+    extract_placeholders,
+)
+from adaptation_atlas_api.domain.models.query import (
+    DerivedCondition,
+    Predicate,
+    PredicateOperator,
+    TabularQuery,
+)
 from adaptation_atlas_api.domain.models.results import TabularResult
 from adaptation_atlas_api.ports.storage import Storage
 from adaptation_atlas_api.ports.tabular_reader import TabularReader
@@ -47,6 +66,58 @@ def _quote_identifier(name: str) -> str:
         The identifier wrapped in double quotes.
     """
     return '"' + name.replace('"', '""') + '"'
+
+
+_NUMERIC_PREFIXES = ("TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT", "UTINYINT", "USMALLINT")
+_CASTABLE_PREFIXES = _NUMERIC_PREFIXES + (
+    "UINTEGER",
+    "UBIGINT",
+    "FLOAT",
+    "DOUBLE",
+    "DECIMAL",
+    "DATE",
+    "TIMESTAMP",
+    "BOOLEAN",
+)
+
+
+def _typed_placeholder(column_type: str) -> str:
+    """Build a bound-parameter placeholder cast to the column type when needed.
+
+    Filter values always arrive as text; comparing them with numeric, date or boolean
+    columns requires an explicit cast so DuckDB does not compare as strings.
+
+    Args:
+        column_type: DuckDB type name of the column.
+
+    Returns:
+        ``?`` for text columns, or ``CAST(? AS <type>)`` for castable types.
+    """
+    upper = column_type.upper()
+    # Only well-known scalar types are cast; everything else is compared as text.
+    if upper.startswith(_CASTABLE_PREFIXES):
+        return f"CAST(? AS {upper})"
+    return "?"
+
+
+def _membership_sql(column: str, column_type: str, count: int) -> str:
+    """Build ``column = ?`` or ``column IN (?, ?, ...)`` with typed placeholders.
+
+    Args:
+        column: Column name.
+        column_type: DuckDB type of the column.
+        count: Number of values to bind.
+
+    Returns:
+        The SQL condition with ``count`` placeholders.
+    """
+    placeholder = _typed_placeholder(column_type)
+    identifier = _quote_identifier(column)
+
+    # A single value keeps the simpler equality form.
+    if count == 1:
+        return f"{identifier} = {placeholder}"
+    return f"{identifier} IN ({', '.join([placeholder] * count)})"
 
 
 class DuckDBTabularReader(TabularReader):
@@ -93,23 +164,29 @@ class DuckDBTabularReader(TabularReader):
         """
         dataset = query.dataset
         columns = [item.name for item in dataset.response_fields]
-        relative_path = self.build_relative_path(query)
-        uri = self._storage.resolve_uri(relative_path)
+        relative_paths = self.build_relative_paths(query)
+        uris = [self._storage.resolve_uri(path) for path in relative_paths]
         cursor = self._get_connection().cursor()
 
         try:
-            source_files = self._count_files(cursor, uri)
-            # A path that matches no file is a valid request with no data.
+            files = self._expand_files(cursor, uris)
+            source_files = len(files)
+            # Paths that match no file are a valid request with no data.
             if source_files == 0:
                 logger.info(
-                    "No source files for dataset '%s' with path '%s'", dataset.id, relative_path
+                    "No source files for dataset '%s' with paths %s", dataset.id, relative_paths
                 )
                 return TabularResult.empty(
                     dataset.id, columns, query.limit, query.offset, query.filters.applied
                 )
 
-            available_columns = self._describe_columns(cursor, uri)
-            sql, parameters = self._build_sql(query, uri, available_columns)
+            column_types = self._describe_columns(cursor, files)
+            available_columns = list(column_types)
+            # Datasets without explicit fields expose the file columns plus declared
+            # partitions, skipping Hive keys the catalog does not declare.
+            if not dataset.has_explicit_fields:
+                columns = self._automatic_columns(cursor, files, dataset, available_columns)
+            sql, parameters = self._build_sql(query, files, column_types, columns=columns)
             rows = self._execute_with_timeout(cursor, sql, parameters)
         except (duckdb.IOException, duckdb.InvalidInputException) as error:
             # Includes HTTP/S3 failures and corrupt files: report a controlled error
@@ -134,7 +211,7 @@ class DuckDBTabularReader(TabularReader):
         total_count = int(rows[0][-1]) if rows else 0
         # When the page is empty but the offset is positive the total is still unknown.
         if not rows and query.offset > 0:
-            total_count = self._count_rows(query, uri, available_columns)
+            total_count = self._count_rows(query, files, column_types)
 
         records = [self._row_to_record(columns, row[:-1]) for row in rows]
         return TabularResult(
@@ -149,29 +226,52 @@ class DuckDBTabularReader(TabularReader):
         )
 
     @staticmethod
-    def build_relative_path(query: TabularQuery) -> str:
-        """Render the dataset path template for the requested partitions and files.
+    def build_relative_paths(query: TabularQuery) -> list[str]:
+        """Render the dataset path template for every requested partition/file combination.
+
+        Each partition placeholder is replaced by each of its requested values (or ``*``
+        when the partition is not filtered) and the ``{file}`` placeholder by the glob of
+        each selected file pattern, producing one path per combination.
 
         Args:
             query: The validated query.
 
         Returns:
-            A path (or glob) relative to the storage root.
+            Distinct paths (or globs) relative to the storage root, in a stable order.
         """
         dataset = query.dataset
         storage = dataset.storage
-        path = storage.path_template
-        file_glob = storage.file_patterns[query.filters.file_pattern_key]
+        filters = query.filters
+        placeholders = [name for name in dataset.template_placeholders() if name != "file"]
+        file_globs = [storage.file_patterns[key] for key in filters.file_pattern_keys]
 
-        # Replace every placeholder with the requested value, or a wildcard when absent.
-        for placeholder in dataset.template_placeholders():
-            # The file placeholder is replaced by the glob of the selected file pattern.
-            if placeholder == "file":
-                replacement = file_glob
-            else:
-                replacement = query.filters.partition_values.get(placeholder, "*")
-            path = path.replace("{" + placeholder + "}", replacement)
-        return path
+        # Placeholders used inside file patterns also need their values.
+        for file_glob in file_globs:
+            for placeholder in extract_placeholders(file_glob):
+                # Keep a stable order without duplicating template placeholders.
+                if placeholder not in placeholders:
+                    placeholders.append(placeholder)
+
+        # Every partition contributes its requested values, or a single wildcard.
+        choices = [filters.partition_values.get(name, ["*"]) for name in placeholders]
+        paths: list[str] = []
+
+        # Build one path per file glob and per combination of partition values.
+        for file_glob in file_globs:
+            for combination in itertools.product(*choices):
+                values = dict(zip(placeholders, combination, strict=True))
+                rendered_glob = file_glob
+                # Substitute the placeholders embedded in the file name first.
+                for placeholder, value in values.items():
+                    rendered_glob = rendered_glob.replace("{" + placeholder + "}", value)
+                path = storage.path_template.replace("{file}", rendered_glob)
+                # Then substitute the folder placeholders of the template.
+                for placeholder, value in values.items():
+                    path = path.replace("{" + placeholder + "}", value)
+                # Identical paths can arise when a pattern ignores a placeholder.
+                if path not in paths:
+                    paths.append(path)
+        return paths
 
     # ------------------------------------------------------------------ #
     # SQL construction
@@ -179,34 +279,37 @@ class DuckDBTabularReader(TabularReader):
     def _build_sql(
         self,
         query: TabularQuery,
-        uri: str,
-        available_columns: set[str],
+        files: list[str],
+        column_types: dict[str, str],
         *,
+        columns: list[str] | None = None,
         count_only: bool = False,
     ) -> tuple[str, list[Any]]:
         """Build the SQL statement and its bound parameters for ``query``.
 
         Args:
             query: The validated query.
-            uri: Resolved storage URI (possibly a glob).
-            available_columns: Columns present in at least one matched file.
+            files: Resolved URIs of the files to read.
+            column_types: Column name -> DuckDB type for every column in the matched files.
+            columns: Columns to project for datasets without explicit fields.
             count_only: When ``True`` build a ``COUNT(*)`` statement instead of a page.
 
         Returns:
             The SQL text and the ordered list of parameters to bind.
         """
         dataset = query.dataset
-        parameters: list[Any] = [uri]
+        parameters: list[Any] = [files]
         source = "read_parquet(?, hive_partitioning=true, union_by_name=true)"
-        where_sql, where_parameters = self._build_where(query, available_columns)
+        available_columns = list(column_types)
+        where_sql, where_parameters = self._build_where(query, column_types)
         parameters.extend(where_parameters)
 
         # Count statements only need the source and the filters.
         if count_only:
             return f"SELECT COUNT(*) FROM {source}{where_sql}", parameters
 
-        select_sql = self._build_select(dataset, available_columns)
-        order_sql = self._build_order_by(dataset)
+        select_sql = self._build_select(dataset, available_columns, columns)
+        order_sql = self._build_order_by(dataset, columns or available_columns)
         parameters.extend([query.limit, query.offset])
         sql = (
             f"SELECT {select_sql}, COUNT(*) OVER () AS {TOTAL_COLUMN} "
@@ -215,16 +318,26 @@ class DuckDBTabularReader(TabularReader):
         return sql, parameters
 
     @staticmethod
-    def _build_select(dataset: DatasetDefinition, available_columns: set[str]) -> str:
+    def _build_select(
+        dataset: DatasetDefinition,
+        available_columns: list[str],
+        automatic_columns: list[str] | None = None,
+    ) -> str:
         """Build the projection list casting each response field to its logical type.
 
         Args:
             dataset: Dataset describing the response fields.
-            available_columns: Columns present in the matched files.
+            available_columns: Columns present in the matched files, in file order.
+            automatic_columns: Columns to project when the dataset has no explicit fields.
 
         Returns:
             The comma separated projection expressions.
         """
+        # Without explicit fields the automatic columns are projected with native types.
+        if not dataset.has_explicit_fields:
+            projected = automatic_columns or available_columns
+            return ", ".join(_quote_identifier(column) for column in projected)
+
         expressions: list[str] = []
 
         # Project every response field, substituting NULL for absent source columns.
@@ -241,39 +354,57 @@ class DuckDBTabularReader(TabularReader):
         return ", ".join(expressions)
 
     @staticmethod
-    def _build_where(query: TabularQuery, available_columns: set[str]) -> tuple[str, list[Any]]:
-        """Build the ``WHERE`` clause from column filters, partitions and derived predicates.
+    def _build_where(query: TabularQuery, column_types: dict[str, str]) -> tuple[str, list[Any]]:
+        """Build the ``WHERE`` clause from column filters, partitions and derived conditions.
+
+        Several values of the same filter are combined with OR (``IN`` lists, or OR-ed
+        predicate groups for derived filters); different filters are combined with AND.
 
         Args:
             query: The validated query.
-            available_columns: Columns present in the matched files.
+            column_types: Column name -> DuckDB type for the columns present in the files.
 
         Returns:
             The ``WHERE`` clause (with a leading space) and its bound parameters. An empty
             clause is returned when there are no conditions.
+
+        Raises:
+            FilterNotApplicableError: If a column filter targets a column absent from the
+                files selected by the query.
         """
         conditions: list[str] = []
         parameters: list[Any] = []
 
         # Partition values are also enforced on the Hive columns as a safety net.
-        for partition, value in sorted(query.filters.partition_values.items()):
+        for partition, values in sorted(query.filters.partition_values.items()):
             # Only partitions exposed as columns can be used in the WHERE clause.
-            if partition in available_columns:
-                conditions.append(f"{_quote_identifier(partition)} = ?")
-                parameters.append(value)
+            if partition in column_types:
+                conditions.append(_membership_sql(partition, column_types[partition], len(values)))
+                parameters.extend(values)
 
-        # Column filters become bound equality predicates.
-        for column, value in sorted(query.filters.column_filters.items()):
-            conditions.append(f"{_quote_identifier(column)} = ?")
-            parameters.append(value)
+        # Column filters become bound membership predicates cast to the column type.
+        for column, values in sorted(query.filters.column_filters.items()):
+            # A filter on a column absent from the selected files cannot be applied.
+            if column not in column_types:
+                parameter_name = query.filters.filter_names_by_column.get(column, column)
+                raise FilterNotApplicableError(
+                    f"Parameter '{parameter_name}' is not applicable to the data selected by "
+                    "the other filters.",
+                    parameter=parameter_name,
+                )
+            conditions.append(_membership_sql(column, column_types[column], len(values)))
+            parameters.extend(values)
 
-        # Derived predicates are translated operator by operator.
-        for predicate in query.filters.derived_predicates:
-            condition, parameter = DuckDBTabularReader._predicate_to_sql(predicate)
-            conditions.append(condition)
-            # Null checks carry no parameter.
-            if parameter is not None:
-                parameters.append(parameter)
+        # Derived conditions are OR-ed alternatives of AND-ed predicates.
+        for condition in query.filters.derived_conditions:
+            sql, condition_parameters = DuckDBTabularReader._derived_condition_to_sql(
+                condition, column_types
+            )
+            # Conditions that are trivially true are omitted.
+            if sql is None:
+                continue
+            conditions.append(sql)
+            parameters.extend(condition_parameters)
 
         # No conditions means no WHERE clause at all.
         if not conditions:
@@ -281,45 +412,99 @@ class DuckDBTabularReader(TabularReader):
         return " WHERE " + " AND ".join(conditions), parameters
 
     @staticmethod
-    def _predicate_to_sql(predicate: Predicate) -> tuple[str, Any]:
+    def _derived_condition_to_sql(
+        condition: DerivedCondition, column_types: dict[str, str]
+    ) -> tuple[str | None, list[Any]]:
+        """Translate a derived condition into ``(... AND ...) OR (... AND ...)`` SQL.
+
+        Args:
+            condition: The derived condition with its alternatives.
+            column_types: Column name -> DuckDB type for the columns present in the files.
+
+        Returns:
+            The SQL fragment (``None`` when trivially true) and its bound parameters.
+        """
+        groups: list[str] = []
+        parameters: list[Any] = []
+
+        # Each alternative is a conjunction of predicates.
+        for alternative in condition.alternatives:
+            pieces: list[str] = []
+            # Translate every predicate, dropping the trivially true ones.
+            for predicate in alternative:
+                sql, parameter = DuckDBTabularReader._predicate_to_sql(
+                    predicate, present=predicate.column in column_types
+                )
+                # ``None`` means the predicate always holds and adds nothing.
+                if sql is None:
+                    continue
+                pieces.append(sql)
+                # Null checks carry no parameter.
+                if parameter is not None:
+                    parameters.append(parameter)
+            # An alternative with no remaining predicate is always true.
+            if not pieces:
+                return None, []
+            groups.append("(" + " AND ".join(pieces) + ")")
+
+        # A single alternative needs no outer parentheses.
+        if len(groups) == 1:
+            return groups[0], parameters
+        return "(" + " OR ".join(groups) + ")", parameters
+
+    @staticmethod
+    def _predicate_to_sql(predicate: Predicate, *, present: bool = True) -> tuple[str | None, Any]:
         """Translate a storage-agnostic predicate into SQL.
+
+        A predicate on a column absent from the files behaves as if the column were
+        entirely ``NULL``: null checks hold, not-null checks and equalities never match.
 
         Args:
             predicate: The predicate to translate.
+            present: Whether the column exists in the selected files.
 
         Returns:
-            The SQL condition and the parameter to bind (``None`` for null checks).
+            The SQL condition (``None`` when trivially true) and the parameter to bind
+            (``None`` for null checks).
 
         Raises:
             QueryExecutionError: If the operator is not supported.
         """
         column = _quote_identifier(predicate.column)
 
-        # Equality binds the value as a parameter.
-        if predicate.operator is PredicateOperator.EQUALS:
-            return f"{column} = ?", predicate.value
-        # Null checks need no parameter.
+        # Null checks need no parameter; on an absent column they are always true.
         if predicate.operator is PredicateOperator.IS_NULL:
-            return f"{column} IS NULL", None
-        # Not-null checks need no parameter either.
+            return (f"{column} IS NULL" if present else None), None
+        # Not-null checks need no parameter; on an absent column they never hold.
         if predicate.operator is PredicateOperator.IS_NOT_NULL:
-            return f"{column} IS NOT NULL", None
+            return (f"{column} IS NOT NULL" if present else "FALSE"), None
+        # Equality binds the value as a parameter; on an absent column it never holds.
+        if predicate.operator is PredicateOperator.EQUALS:
+            return (f"{column} = ?" if present else "FALSE"), (predicate.value if present else None)
         raise QueryExecutionError(f"Unsupported predicate operator '{predicate.operator}'.")
 
     @staticmethod
-    def _build_order_by(dataset: DatasetDefinition) -> str:
+    def _build_order_by(dataset: DatasetDefinition, available_columns: list[str]) -> str:
         """Build the ``ORDER BY`` clause guaranteeing stable pagination.
 
         Args:
             dataset: Dataset declaring the sort fields.
+            available_columns: Columns present in the matched files.
 
         Returns:
             The ``ORDER BY`` clause with a leading space, or an empty string.
         """
-        # Without declared sort fields DuckDB returns rows in scan order.
-        if not dataset.order_by:
+        # Explicit fields are always projected (as NULL when absent), so any of them sorts.
+        if dataset.has_explicit_fields:
+            sort_fields = list(dataset.order_by)
+        # Automatic fields can only sort by columns that actually exist in the files.
+        else:
+            sort_fields = [name for name in dataset.order_by if name in available_columns]
+
+        # Without usable sort fields DuckDB returns rows in scan order.
+        if not sort_fields:
             return ""
-        return " ORDER BY " + ", ".join(_quote_identifier(name) for name in dataset.order_by)
+        return " ORDER BY " + ", ".join(_quote_identifier(name) for name in sort_fields)
 
     # ------------------------------------------------------------------ #
     # Execution helpers
@@ -372,56 +557,100 @@ class DuckDBTabularReader(TabularReader):
             timer.cancel()
 
     @staticmethod
-    def _count_files(cursor: duckdb.DuckDBPyConnection, uri: str) -> int:
-        """Count the files matching ``uri`` without reading their content.
+    def _expand_files(cursor: duckdb.DuckDBPyConnection, uris: list[str]) -> list[str]:
+        """Expand every URI or glob into the concrete files that exist.
 
         Args:
             cursor: Cursor to execute on.
-            uri: Resolved URI or glob.
+            uris: Resolved URIs or globs.
 
         Returns:
-            Number of matching files.
+            Distinct matching file URIs, in a stable order.
         """
-        try:
-            row = cursor.execute("SELECT COUNT(*) FROM glob(?)", [uri]).fetchone()
-        except duckdb.IOException as error:
-            # DuckDB reports an empty glob as an IO error on some backends.
-            if "No files found" in str(error):
-                return 0
-            raise
-        return int(row[0]) if row else 0
+        files: list[str] = []
+
+        # Glob each path separately so a path without matches does not fail the others.
+        for uri in uris:
+            try:
+                rows = cursor.execute("SELECT file FROM glob(?) ORDER BY file", [uri]).fetchall()
+            except duckdb.IOException as error:
+                # DuckDB reports an empty glob as an IO error on some backends.
+                if "No files found" in str(error):
+                    continue
+                raise
+            # Keep each file once even when several globs overlap.
+            for row in rows:
+                if row[0] not in files:
+                    files.append(row[0])
+        return files
 
     @staticmethod
-    def _describe_columns(cursor: duckdb.DuckDBPyConnection, uri: str) -> set[str]:
-        """Return the union of column names across the matched files.
+    def _describe_columns(cursor: duckdb.DuckDBPyConnection, files: list[str]) -> dict[str, str]:
+        """Return the union of columns across the matched files with their DuckDB types.
 
         Args:
             cursor: Cursor to execute on.
-            uri: Resolved URI or glob.
+            files: Resolved file URIs.
 
         Returns:
-            Column names available to the query.
+            Column name -> DuckDB type, in file order.
         """
         rows = cursor.execute(
             "DESCRIBE SELECT * FROM read_parquet(?, hive_partitioning=true, union_by_name=true)",
-            [uri],
+            [files],
         ).fetchall()
-        return {row[0] for row in rows}
+        return {row[0]: str(row[1]) for row in rows}
 
-    def _count_rows(self, query: TabularQuery, uri: str, available_columns: set[str]) -> int:
+    @staticmethod
+    def _automatic_columns(
+        cursor: duckdb.DuckDBPyConnection,
+        files: list[str],
+        dataset: DatasetDefinition,
+        available_columns: list[str],
+    ) -> list[str]:
+        """Choose the columns returned by a dataset without explicit response fields.
+
+        Args:
+            cursor: Cursor to execute on.
+            files: Resolved file URIs.
+            dataset: Dataset being queried.
+            available_columns: Columns exposed with Hive partitioning enabled.
+
+        Returns:
+            The file columns in file order, followed by the declared partition keys that
+            only exist as Hive folder values.
+        """
+        rows = cursor.execute(
+            "DESCRIBE SELECT * FROM read_parquet(?, hive_partitioning=false, union_by_name=true)",
+            [files],
+        ).fetchall()
+        excluded = set(dataset.excluded_columns)
+        file_columns = [row[0] for row in rows if row[0] not in excluded]
+        declared = {partition.name for partition in dataset.partitions}
+        # Hive-only columns are kept only when the catalog declares them as partitions.
+        extra = [
+            name
+            for name in available_columns
+            if name not in file_columns and name in declared and name not in excluded
+        ]
+        return file_columns + extra
+
+    def _count_rows(
+        self, query: TabularQuery, files: list[str], column_types: dict[str, str]
+    ) -> int:
         """Count the rows matching ``query`` (used when a page beyond the end is requested).
 
         Args:
             query: The validated query.
-            uri: Resolved URI or glob.
-            available_columns: Columns present in the matched files.
+            files: Resolved file URIs.
+            column_types: Column name -> DuckDB type for the columns present in the files.
 
         Returns:
             Total number of matching rows.
         """
         cursor = self._get_connection().cursor()
         try:
-            sql, parameters = self._build_sql(query, uri, available_columns, count_only=True)
+            sql, parameters = self._build_sql(query, files, column_types, count_only=True)
             rows = self._execute_with_timeout(cursor, sql, parameters)
         except duckdb.Error as error:
             logger.error("DuckDB count error for dataset '%s': %s", query.dataset.id, error)
@@ -441,14 +670,21 @@ class DuckDBTabularReader(TabularReader):
             row: Values returned by DuckDB.
 
         Returns:
-            The record, with NaN values converted to ``None``.
+            The record, with NaN values converted to ``None``, decimals to floats and
+            dates/timestamps to ISO 8601 strings.
         """
         record: dict[str, Any] = {}
 
-        # Pair each value with its column name, sanitizing floats JSON cannot encode.
+        # Pair each value with its column name, sanitizing values JSON/CSV cannot encode.
         for name, value in zip(columns, row, strict=True):
             # NaN and infinities are not valid JSON numbers.
             if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
                 value = None
+            # Decimals are rendered as floats for client friendliness.
+            elif isinstance(value, Decimal):
+                value = float(value)
+            # Dates and timestamps are serialized as ISO 8601 text.
+            elif isinstance(value, (dt.date, dt.datetime)):
+                value = value.isoformat()
             record[name] = value
         return record

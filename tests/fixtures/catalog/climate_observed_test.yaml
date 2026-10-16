@@ -1,0 +1,44 @@
+# Test dataset: single-file dataset whose administrative level is encoded in the file name
+# (variable=adm0_obs.parquet / variable=adm1_obs.parquet) and a processing partition.
+id: climate_observed_test
+name: Observed climate by administrative unit (test)
+domain: climate
+type: tabular
+reader: duckdb_parquet
+storage:
+  path_template: "domain=climate/type=observational/source=chirps-chirts-era5/region=africa/processing={processing}/{file}"
+  file_patterns:
+    "0": "variable=adm0_obs.parquet"
+    "1": "variable=adm1_obs.parquet"
+  default_file_pattern: "0"
+partitions:
+  - name: processing
+    allowed_values: [admin-monthly, admin-periods]
+filters:
+  - name: country
+    source: column
+    target: iso3
+    required: true
+    case_insensitive: true
+  - name: aggregation
+    source: partition
+    target: processing
+    default: admin-monthly
+    allowed_values: [admin-monthly, admin-periods]
+  - name: admin_level
+    source: file_pattern
+    default: "0"
+    allowed_values: ["0", "1"]
+  - name: variable
+    source: column
+    target: variable
+    allowed_values: [prec, tmax]
+response_fields:
+  - { name: iso3, type: string }
+  - { name: admin1_name, type: string }
+  - { name: year, type: integer }
+  - { name: month, type: integer }
+  - { name: variable, type: string }
+  - { name: value, type: number }
+  - { name: unit, type: string }
+order_by: [iso3, admin1_name, year, month, variable]
