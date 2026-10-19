@@ -37,6 +37,9 @@ class Settings(BaseSettings):
         duckdb_memory_limit: Memory limit passed to DuckDB.
         duckdb_threads: Number of threads DuckDB may use.
         query_timeout_seconds: Maximum seconds a single query may run.
+        max_skipped_files: Maximum number of unreadable (corrupt or truncated) source
+            files a single query may skip before failing with ``503``; ``0`` disables
+            skipping so any unreadable file fails the query.
         max_rows_per_response: Hard cap of rows returned in one response.
         default_page_size: Page size applied when the client does not send ``limit``.
     """
@@ -74,6 +77,7 @@ class Settings(BaseSettings):
     duckdb_memory_limit: str = "2GB"
     duckdb_threads: int = Field(default=4, ge=1)
     query_timeout_seconds: int = Field(default=60, ge=1)
+    max_skipped_files: int = Field(default=5, ge=0)
     max_rows_per_response: int = Field(default=50_000, ge=1)
     default_page_size: int = Field(default=1_000, ge=1)
 

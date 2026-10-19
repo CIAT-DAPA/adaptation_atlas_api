@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import duckdb
 import pytest
 
 from adaptation_atlas_api.adapters.storage.local_storage import LocalStorage
@@ -229,17 +230,86 @@ def test_pagination_is_stable_and_counts_total(
     assert beyond.total_count == full.total_count
 
 
+HAZARD_ROOT = "domain=hazard_exposure/source=atlas_cmip6/region=ssa/processing=hazard-risk-exposure"
+
+
+def write_corrupt_file(root: Path, partition: str) -> Path:
+    """Write a file that is not Parquet (simulating a truncated S3 upload)."""
+    leaf = root / HAZARD_ROOT / partition
+    leaf.mkdir(parents=True, exist_ok=True)
+    target = leaf / "interaction.parquet"
+    target.write_bytes(b"this is not a parquet file")
+    return target
+
+
 def test_unreadable_source_raises_controlled_error(
     tmp_path: Path, hazard_dataset: DatasetDefinition
 ) -> None:
-    leaf = (
-        tmp_path
-        / "domain=hazard_exposure/source=atlas_cmip6/region=ssa/processing=hazard-risk-exposure"
-        "/variable=vop_intld15/period=annual/model=historic/severity=moderate"
+    # The only matching file is corrupt: nothing can be served.
+    write_corrupt_file(
+        tmp_path, "variable=vop_intld15/period=annual/model=historic/severity=moderate"
     )
-    leaf.mkdir(parents=True)
-    (leaf / "interaction.parquet").write_bytes(b"this is not a parquet file")
     broken_reader = DuckDBTabularReader(LocalStorage(tmp_path), query_timeout_seconds=10)
     with pytest.raises(SourceUnavailableError) as error:
         broken_reader.query(make_query(hazard_dataset, {"country": "KEN", "period": "historic"}))
     assert str(tmp_path) not in error.value.message
+
+
+def test_corrupt_file_is_skipped_and_reported(
+    storage_root: Path, hazard_dataset: DatasetDefinition
+) -> None:
+    # A corrupt file next to the valid synthetic ones must not fail the query.
+    corrupt = write_corrupt_file(
+        storage_root, "variable=vop_intld15/period=annual/model=historic/severity=extreme"
+    )
+    try:
+        reader = DuckDBTabularReader(LocalStorage(storage_root), query_timeout_seconds=10)
+        result = reader.query(make_query(hazard_dataset, {"country": "KEN", "period": "historic"}))
+        assert result.total_count > 0
+        assert result.source_files == 2
+        assert result.is_partial is True
+        assert result.skipped_files == [
+            "source=atlas_cmip6/region=ssa/processing=hazard-risk-exposure/"
+            "variable=vop_intld15/period=annual/model=historic/severity=extreme/interaction.parquet"
+        ]
+        # The bucket/root location is never exposed.
+        assert all(str(storage_root) not in item for item in result.skipped_files)
+        # Pagination beyond the end still counts over the readable files only.
+        beyond = reader.query(
+            make_query(hazard_dataset, {"country": "KEN", "period": "historic"}, offset=10_000)
+        )
+        assert beyond.total_count == result.total_count
+    finally:
+        corrupt.unlink()
+        corrupt.parent.rmdir()
+
+
+def test_skip_budget_is_enforced(storage_root: Path, hazard_dataset: DatasetDefinition) -> None:
+    corrupt = write_corrupt_file(
+        storage_root, "variable=vop_intld15/period=annual/model=historic/severity=extreme"
+    )
+    try:
+        strict_reader = DuckDBTabularReader(
+            LocalStorage(storage_root), query_timeout_seconds=10, max_skipped_files=0
+        )
+        with pytest.raises(SourceUnavailableError):
+            strict_reader.query(
+                make_query(hazard_dataset, {"country": "KEN", "period": "historic"})
+            )
+    finally:
+        corrupt.unlink()
+        corrupt.parent.rmdir()
+
+
+def test_unreadable_file_detection() -> None:
+    files = ["s3://bucket/a.parquet", "s3://bucket/b.parquet"]
+    corrupt = duckdb.InvalidInputException(
+        "Invalid Input Error: No magic bytes found at end of file 's3://bucket/b.parquet'"
+    )
+    assert DuckDBTabularReader._unreadable_file(corrupt, files) == "s3://bucket/b.parquet"
+    # Transport failures are not corrupt files, even when they name one.
+    http = duckdb.IOException("IO Error: HTTP GET error on 's3://bucket/a.parquet' (HTTP 403)")
+    assert DuckDBTabularReader._unreadable_file(http, files) is None
+    # Errors that name no file in the list cannot be attributed.
+    other = duckdb.InvalidInputException("Invalid Input Error: No magic bytes found 'x.parquet'")
+    assert DuckDBTabularReader._unreadable_file(other, files) is None

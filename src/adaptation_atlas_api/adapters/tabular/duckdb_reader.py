@@ -10,7 +10,10 @@ The reader turns a :class:`TabularQuery` into a parameterized SQL statement:
 * ``hive_partitioning`` exposes the partition values as columns and
   ``union_by_name`` tolerates schema differences between files;
 * response fields missing from every matched file are returned as ``NULL``;
-* datasets without explicit response fields return every source column as is.
+* datasets without explicit response fields return every source column as is;
+* corrupt or truncated files (e.g. an incomplete S3 upload without the Parquet footer)
+  are skipped, up to a configurable maximum, and reported in the result instead of
+  failing the whole query.
 """
 
 from __future__ import annotations
@@ -48,6 +51,16 @@ from adaptation_atlas_api.ports.tabular_reader import TabularReader
 logger = logging.getLogger(__name__)
 
 TOTAL_COLUMN = "__total_count"
+
+# Fragments (lower case) of DuckDB messages that identify a corrupt or truncated file,
+# as opposed to a network, permission or missing-object failure.
+_UNREADABLE_MARKERS = (
+    "magic bytes",
+    "not a parquet file",
+    "corrupt",
+    "footer",
+    "invalid input error",
+)
 
 _CAST_BY_TYPE = {
     FieldType.STRING: "VARCHAR",
@@ -130,6 +143,7 @@ class DuckDBTabularReader(TabularReader):
         memory_limit: str = "2GB",
         threads: int = 4,
         query_timeout_seconds: int = 60,
+        max_skipped_files: int = 5,
     ) -> None:
         """Create the reader.
 
@@ -138,11 +152,14 @@ class DuckDBTabularReader(TabularReader):
             memory_limit: Memory limit handed to DuckDB (e.g. ``2GB``).
             threads: Number of threads DuckDB may use.
             query_timeout_seconds: Seconds after which a running query is interrupted.
+            max_skipped_files: Maximum number of unreadable files one query may skip
+                before failing; ``0`` means any unreadable file fails the query.
         """
         self._storage = storage
         self._memory_limit = memory_limit
         self._threads = threads
         self._timeout = query_timeout_seconds
+        self._max_skipped_files = max_skipped_files
         self._connection: duckdb.DuckDBPyConnection | None = None
         self._lock = threading.Lock()
 
@@ -156,10 +173,13 @@ class DuckDBTabularReader(TabularReader):
             query: A validated tabular query.
 
         Returns:
-            The matching records, or an empty result when no file or row matches.
+            The matching records, or an empty result when no file or row matches. When
+            some matched files were unreadable and skipped, they are listed in
+            ``skipped_files``.
 
         Raises:
-            SourceUnavailableError: When the storage cannot be read.
+            SourceUnavailableError: When the storage cannot be read, or more files are
+                unreadable than the reader is allowed to skip.
             QueryExecutionError: When DuckDB fails or the query times out.
         """
         dataset = query.dataset
@@ -167,12 +187,12 @@ class DuckDBTabularReader(TabularReader):
         relative_paths = self.build_relative_paths(query)
         uris = [self._storage.resolve_uri(path) for path in relative_paths]
         cursor = self._get_connection().cursor()
+        skipped: list[str] = []
 
         try:
             files = self._expand_files(cursor, uris)
-            source_files = len(files)
             # Paths that match no file are a valid request with no data.
-            if source_files == 0:
+            if not files:
                 logger.info(
                     "No source files for dataset '%s' with paths %s", dataset.id, relative_paths
                 )
@@ -180,14 +200,42 @@ class DuckDBTabularReader(TabularReader):
                     dataset.id, columns, query.limit, query.offset, query.filters.applied
                 )
 
-            column_types = self._describe_columns(cursor, files)
-            available_columns = list(column_types)
-            # Datasets without explicit fields expose the file columns plus declared
-            # partitions, skipping Hive keys the catalog does not declare.
-            if not dataset.has_explicit_fields:
-                columns = self._automatic_columns(cursor, files, dataset, available_columns)
-            sql, parameters = self._build_sql(query, files, column_types, columns=columns)
-            rows = self._execute_with_timeout(cursor, sql, parameters)
+            # Each attempt reads the current file list; an unreadable file is dropped
+            # and the attempt repeated, until the query succeeds or the skip budget
+            # is exhausted.
+            while True:
+                try:
+                    column_types = self._describe_columns(cursor, files)
+                    available_columns = list(column_types)
+                    # Datasets without explicit fields expose the file columns plus
+                    # declared partitions, skipping Hive keys the catalog does not declare.
+                    if not dataset.has_explicit_fields:
+                        columns = self._automatic_columns(cursor, files, dataset, available_columns)
+                    sql, parameters = self._build_sql(query, files, column_types, columns=columns)
+                    rows = self._execute_with_timeout(cursor, sql, parameters)
+                    break
+                except (duckdb.IOException, duckdb.InvalidInputException) as error:
+                    unreadable = self._unreadable_file(error, files)
+                    # Failures not tied to one corrupt file, or beyond the budget, are
+                    # reported as unavailable source data.
+                    if unreadable is None or len(skipped) >= self._max_skipped_files:
+                        raise
+                    files.remove(unreadable)
+                    partition_path = self._partition_path(dataset, unreadable)
+                    skipped.append(partition_path)
+                    logger.warning(
+                        "Skipping unreadable file for dataset '%s': %s (%s)",
+                        dataset.id,
+                        unreadable,
+                        str(error).splitlines()[0],
+                    )
+                    # When every matched file was unreadable there is nothing to serve.
+                    if not files:
+                        raise SourceUnavailableError(
+                            f"The source data for dataset '{dataset.id}' is currently "
+                            "unavailable: every matching file is unreadable."
+                        ) from error
+            source_files = len(files)
         except (duckdb.IOException, duckdb.InvalidInputException) as error:
             # Includes HTTP/S3 failures and corrupt files: report a controlled error
             # without exposing the URI.
@@ -223,7 +271,55 @@ class DuckDBTabularReader(TabularReader):
             offset=query.offset,
             applied_filters=dict(query.filters.applied),
             source_files=source_files,
+            skipped_files=skipped,
         )
+
+    @staticmethod
+    def _unreadable_file(error: duckdb.Error, files: list[str]) -> str | None:
+        """Identify the corrupt or truncated file named by a DuckDB error, if any.
+
+        Only errors that describe an unreadable file (missing Parquet footer, invalid
+        input...) are considered; network, permission or missing-object failures are
+        not, so they still fail the query as a whole.
+
+        Args:
+            error: The DuckDB exception raised while reading ``files``.
+            files: URIs the failing statement was reading.
+
+        Returns:
+            The URI of the unreadable file, or ``None`` when the error does not point at
+            exactly one corrupt file.
+        """
+        message = str(error)
+        lowered = message.lower()
+        # HTTP failures are transport problems, never a corrupt file.
+        if "http" in lowered and "magic bytes" not in lowered:
+            return None
+        # The message must describe a corrupt file, not any other input problem.
+        if not any(marker in lowered for marker in _UNREADABLE_MARKERS):
+            return None
+        # The file is identified by its URI quoted inside the message.
+        for uri in files:
+            if uri in message:
+                return uri
+        return None
+
+    def _partition_path(self, dataset: DatasetDefinition, uri: str) -> str:
+        """Render a file URI as a path relative to the dataset root, hiding the bucket.
+
+        Args:
+            dataset: Dataset the file belongs to.
+            uri: Resolved file URI.
+
+        Returns:
+            The partition folders and file name below the dataset's static prefix, or the
+            bare file name when the URI does not start with that prefix.
+        """
+        base = self._storage.resolve_uri(dataset.storage.static_prefix).rstrip("/")
+        # Files under the dataset root are reported by their partition path.
+        if base and uri.startswith(base):
+            return uri[len(base) :].lstrip("/")
+        return uri.rsplit("/", 1)[-1]
 
     @staticmethod
     def build_relative_paths(query: TabularQuery) -> list[str]:

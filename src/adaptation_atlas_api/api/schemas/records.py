@@ -62,5 +62,7 @@ class RecordsResponse(BaseModel):
             offset=result.offset,
             has_more=result.has_more,
             source_files=result.source_files,
+            skipped_files=list(result.skipped_files),
+            partial=result.is_partial,
         )
         return cls(metadata=metadata, data=result.records)

@@ -64,6 +64,7 @@ All settings are read from `.env` (see `.env.example` for the full list):
 | `CATALOG_PATH` | Directory with the dataset YAML files. |
 | `PARTITION_CACHE_TTL_SECONDS` | Lifetime of the discovered partition index. |
 | `DUCKDB_MEMORY_LIMIT`, `DUCKDB_THREADS`, `QUERY_TIMEOUT_SECONDS` | Query engine limits. |
+| `MAX_SKIPPED_FILES` | Unreadable (corrupt or truncated) source files a single query may skip; `0` makes any unreadable file fail the query with 503. |
 | `MAX_ROWS_PER_RESPONSE`, `DEFAULT_PAGE_SIZE` | Pagination limits. |
 
 ## Running
@@ -150,6 +151,19 @@ Error responses share one schema:
 | 404 | Unknown dataset identifier. |
 | 422 | Unsupported parameter, missing required parameter or value outside the vocabulary. |
 | 503 | Source data unavailable (storage failure); internal paths are never exposed. |
+
+### Partial responses (corrupt source files)
+
+A truncated or corrupt Parquet object in the bucket (for example an interrupted upload
+without the Parquet footer) is skipped instead of failing the whole query, up to
+`MAX_SKIPPED_FILES` per request. The response then carries `metadata.partial: true` and
+`metadata.skipped_files` with the partition path of each file left out, and the server
+logs a warning. Clients should treat such responses as incomplete and the data team
+should re-upload the listed files. To find every unreadable file under a prefix:
+
+```bash
+uv run python scripts/inspect_dataset.py --check-only "domain=hazard_exposure/"   # exit code 1 if any
+```
 
 ## Development
 

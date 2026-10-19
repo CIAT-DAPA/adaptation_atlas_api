@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -262,3 +263,41 @@ def test_list_conflict_between_json_and_query(client: TestClient) -> None:
     )
     assert response.status_code == 422
     assert response.json()["code"] == "conflicting_filter"
+
+
+def test_corrupt_source_file_yields_partial_response(
+    client: TestClient, storage_root: Path
+) -> None:
+    leaf = (
+        storage_root
+        / "domain=hazard_exposure/source=atlas_cmip6/region=ssa/processing=hazard-risk-exposure"
+        / "variable=vop_intld15/period=annual/model=historic/severity=extreme"
+    )
+    leaf.mkdir(parents=True, exist_ok=True)
+    corrupt = leaf / "interaction.parquet"
+    corrupt.write_bytes(b"not a parquet file")
+    try:
+        response = client.get(
+            "/api/v1/datasets/hazard_exposure/records",
+            params={"country": "KEN", "period": "historic"},
+        )
+        assert response.status_code == 200
+        metadata = response.json()["metadata"]
+        assert metadata["partial"] is True
+        assert metadata["skipped_files"] == [
+            "source=atlas_cmip6/region=ssa/processing=hazard-risk-exposure/"
+            "variable=vop_intld15/period=annual/model=historic/severity=extreme/interaction.parquet"
+        ]
+        assert metadata["source_files"] == 2
+        assert metadata["total_count"] > 0
+    finally:
+        corrupt.unlink()
+        leaf.rmdir()
+
+
+def test_complete_response_is_not_partial(client: TestClient) -> None:
+    metadata = client.get(
+        "/api/v1/datasets/hazard_exposure/records", params={"country": "KEN", "period": "historic"}
+    ).json()["metadata"]
+    assert metadata["partial"] is False
+    assert metadata["skipped_files"] == []

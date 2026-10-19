@@ -32,7 +32,12 @@ class ResponseMetadata(BaseModel):
         limit: Page size applied.
         offset: Records skipped.
         has_more: Whether another page exists.
-        source_files: Number of source files matched by the query.
+        source_files: Number of source files read by the query.
+        skipped_files: Partition paths of matched source files that could not be read
+            (corrupt or truncated objects) and were left out. Empty when the response is
+            complete; when not empty, ``partial`` is ``True`` and the data team should
+            be notified.
+        partial: Whether the response is missing data because of skipped files.
     """
 
     dataset_id: str
@@ -43,6 +48,15 @@ class ResponseMetadata(BaseModel):
     offset: int
     has_more: bool
     source_files: int
+    skipped_files: list[str] = Field(
+        default_factory=list,
+        examples=[
+            [
+                "variable=vop_intld15/period=jagermeyr/model=ENSEMBLE/severity=severe/interaction.parquet"
+            ]
+        ],
+    )
+    partial: bool = False
 
 
 class HealthResponse(BaseModel):

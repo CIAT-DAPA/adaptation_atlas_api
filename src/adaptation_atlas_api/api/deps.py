@@ -105,6 +105,7 @@ def build_container(settings: Settings) -> Container:
         memory_limit=settings.duckdb_memory_limit,
         threads=settings.duckdb_threads,
         query_timeout_seconds=settings.query_timeout_seconds,
+        max_skipped_files=settings.max_skipped_files,
     )
 
     catalog_service = CatalogService(catalog, partition_index, api_prefix=settings.api_prefix)

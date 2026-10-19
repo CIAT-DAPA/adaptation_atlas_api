@@ -33,18 +33,17 @@ OPENAPI_TAGS = [
         "name": "Records",
         "description": (
             "Query records of any tabular dataset by its identifier; filters are defined per "
-            "dataset in the catalog (HU-001 hazard exposure, climate, exposure, impacts...)."
+            "dataset in the catalog."
         ),
     },
 ]
 
 API_DESCRIPTION = """
 The **Adaptation Atlas API** gives standardized access to prioritized climate, hazard and
-exposure datasets produced by the Adaptation Atlas and stored in AWS S3.
+exposure datasets produced by the Adaptation Atlas.
 
 Consumers query datasets through business-oriented parameters (country, period, crop,
-severity...) without knowing the storage layout. Responses are JSON by default and CSV on
-request.
+severity...). Responses are JSON by default and CSV on request.
 """
 
 

@@ -17,12 +17,17 @@ Usage::
     # Inspect local files instead of S3 (STORAGE_BACKEND=local in .env or --local)
     uv run python scripts/inspect_dataset.py --local /data/bucket "domain=phenology/"
 
+    # Only verify that every Parquet file can be opened (reads the footer of each file)
+    uv run python scripts/inspect_dataset.py --check-only "domain=hazard_exposure/"
+
 Options:
     --output PATH        Write the JSON report to PATH (default: print to stdout).
     --max-distinct N     Columns with more distinct values than N are summarised with
                          min/max only (default: 60).
     --sample-rows N      Rows of each file group included as an example (default: 3).
     --local ROOT         Read files under ROOT instead of S3.
+    --check-only         Do not profile columns; just list the files that cannot be
+                         read (corrupt or truncated uploads). Exit code 1 if any.
 """
 
 from __future__ import annotations
@@ -216,12 +221,65 @@ def inspect_group(
     return report
 
 
+def list_parquet_keys(storage: Storage, prefix: str) -> list[str]:
+    """Return the Parquet keys to inspect for one prefix or exact key.
+
+    Args:
+        storage: Storage adapter used to list files.
+        prefix: Storage prefix (folder) or exact Parquet key.
+
+    Returns:
+        The Parquet keys under the prefix (or the key itself).
+    """
+    # An exact Parquet key is inspected on its own; folders are listed.
+    if prefix.endswith(PARQUET_SUFFIX):
+        return [prefix]
+    return [
+        key
+        for key in storage.list_files(prefix, suffix=PARQUET_SUFFIX)
+        # Backup copies with a double extension are not datasets.
+        if key.endswith(PARQUET_SUFFIX)
+    ]
+
+
+def check_files(
+    connection: duckdb.DuckDBPyConnection, storage: Storage, keys: list[str]
+) -> list[dict[str, str]]:
+    """Open the footer of every file and collect the ones that cannot be read.
+
+    Reading the footer (``parquet_file_metadata``) is enough to detect truncated or
+    corrupt uploads without scanning the data.
+
+    Args:
+        connection: DuckDB connection with storage access configured.
+        storage: Storage adapter used to resolve URIs.
+        keys: Keys of the files to check.
+
+    Returns:
+        One ``{"key", "error"}`` entry per unreadable file.
+    """
+    unreadable: list[dict[str, str]] = []
+
+    # Every file is checked on its own so one failure does not hide the others.
+    for key in keys:
+        try:
+            connection.execute(
+                "SELECT num_rows FROM parquet_file_metadata(?)", [storage.resolve_uri(key)]
+            ).fetchone()
+        except duckdb.Error as error:
+            first_line = str(error).splitlines()[0]
+            logger.warning("UNREADABLE %s: %s", key, first_line)
+            unreadable.append({"key": key, "error": first_line})
+    return unreadable
+
+
 def inspect_prefixes(
     prefixes: list[str],
     *,
     local_root: str | None,
     max_distinct: int,
     sample_rows: int,
+    check_only: bool = False,
 ) -> dict[str, Any]:
     """Inspect every Parquet file found under the given prefixes.
 
@@ -230,9 +288,11 @@ def inspect_prefixes(
         local_root: Local directory to use instead of S3, or ``None``.
         max_distinct: Columns above this cardinality are summarised with min/max only.
         sample_rows: Number of example rows to include per group.
+        check_only: When ``True`` only verify that each file can be opened.
 
     Returns:
-        Prefix -> group label -> inspection report.
+        Prefix -> group label -> inspection report, or prefix -> readability report
+        (``files`` and ``unreadable``) in check-only mode.
     """
     storage = build_storage(local_root)
     connection = duckdb.connect(database=":memory:")
@@ -241,17 +301,13 @@ def inspect_prefixes(
 
     # Walk each prefix, grouping its Parquet files before inspecting them.
     for prefix in prefixes:
-        # An exact Parquet key is inspected on its own; folders are listed.
-        if prefix.endswith(PARQUET_SUFFIX):
-            keys = [prefix]
-        else:
-            keys = [
-                key
-                for key in storage.list_files(prefix, suffix=PARQUET_SUFFIX)
-                # Backup copies with a double extension are not datasets.
-                if key.endswith(PARQUET_SUFFIX)
-            ]
+        keys = list_parquet_keys(storage, prefix)
         logger.info("Prefix %s: %d parquet files", prefix, len(keys))
+        # In check-only mode the files are opened one by one and nothing is profiled.
+        if check_only:
+            unreadable = check_files(connection, storage, keys)
+            results[prefix] = {"files": len(keys), "unreadable": unreadable}
+            continue
         groups = group_files(keys)
         results[prefix] = {}
 
@@ -285,6 +341,11 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-distinct", type=int, default=60)
     parser.add_argument("--sample-rows", type=int, default=3)
     parser.add_argument("--local", default=None, metavar="ROOT", help="Local storage root.")
+    parser.add_argument(
+        "--check-only",
+        action="store_true",
+        help="Only report the Parquet files that cannot be opened.",
+    )
     return parser.parse_args(argv)
 
 
@@ -304,6 +365,7 @@ def main(argv: list[str] | None = None) -> int:
         local_root=arguments.local,
         max_distinct=arguments.max_distinct,
         sample_rows=arguments.sample_rows,
+        check_only=arguments.check_only,
     )
     text = json.dumps(report, indent=2, default=str)
 
@@ -313,6 +375,12 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("Report written to %s", arguments.output)
     else:
         print(text)
+
+    # In check-only mode a non-zero exit code flags unreadable files (useful in CI).
+    if arguments.check_only:
+        unreadable_total = sum(len(entry["unreadable"]) for entry in report.values())
+        logger.info("Unreadable files: %d", unreadable_total)
+        return 1 if unreadable_total else 0
     return 0
 
 

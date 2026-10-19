@@ -18,7 +18,9 @@ class TabularResult:
         limit: Page size applied to the query.
         offset: Number of rows skipped.
         applied_filters: Public filter name -> canonical value or values actually applied.
-        source_files: Number of source files that matched the query.
+        source_files: Number of source files that matched the query and were read.
+        skipped_files: Partition paths (relative to the dataset root, never a full URI)
+            of matched files that could not be read and were left out of the result.
     """
 
     dataset_id: str
@@ -29,6 +31,16 @@ class TabularResult:
     offset: int = 0
     applied_filters: dict[str, str | list[str]] = field(default_factory=dict)
     source_files: int = 0
+    skipped_files: list[str] = field(default_factory=list)
+
+    @property
+    def is_partial(self) -> bool:
+        """Tell whether some matched source files were skipped.
+
+        Returns:
+            ``True`` when at least one file could not be read.
+        """
+        return bool(self.skipped_files)
 
     @property
     def returned_count(self) -> int:
