@@ -15,6 +15,7 @@ router = APIRouter(prefix="/datasets", tags=["Catalog"])
 @router.get(
     "",
     response_model=list[DatasetSummary],
+    responses={422: ERROR_RESPONSES[422]},
     summary="List published datasets",
     description=(
         "Returns every dataset registered in the catalog, optionally restricted to one "
@@ -28,18 +29,31 @@ def list_datasets(
         description="Only return datasets of this domain (e.g. `climate`, `exposure`).",
         examples=["climate"],
     ),
+    type: str | None = Query(
+        default=None,
+        description=(
+            "Only return datasets of this kind: `tabular` (served by "
+            "`GET /datasets/{dataset_id}/records`) or `raster` (served by "
+            "`POST /datasets/{dataset_id}/raster`)."
+        ),
+        examples=["raster"],
+    ),
     service: CatalogService = Depends(get_catalog_service),
 ) -> list[DatasetSummary]:
-    """List registered datasets, optionally filtered by domain.
+    """List registered datasets, optionally filtered by domain and kind.
 
     Args:
         domain: Thematic domain to filter by, or ``None`` for every dataset.
+        type: Dataset kind to filter by, or ``None`` for every kind.
         service: Catalog service.
 
     Returns:
         Dataset summaries sorted by identifier.
     """
-    return [DatasetSummary.from_domain(dataset) for dataset in service.list_datasets(domain=domain)]
+    return [
+        DatasetSummary.from_domain(dataset)
+        for dataset in service.list_datasets(domain=domain, dataset_type=type)
+    ]
 
 
 @router.get(
@@ -48,10 +62,12 @@ def list_datasets(
     responses={404: ERROR_RESPONSES[404]},
     summary="Describe a dataset",
     description=(
-        "Returns the filters accepted by the dataset with their valid values, the fields of "
-        "every record and, when partition discovery is enabled, the partition combinations "
-        "that actually exist in storage. Use it to build queries for "
-        "`GET /datasets/{dataset_id}/records`."
+        "Returns the filters accepted by the dataset with their valid values and, when "
+        "partition discovery is enabled, the partition combinations that actually exist in "
+        "storage. Tabular datasets also list the fields of every record (use them with "
+        "`GET /datasets/{dataset_id}/records`); raster datasets describe their CRS, "
+        "resolution, variables, units and supported aggregations, plus an example body for "
+        "`POST /datasets/{dataset_id}/raster`."
     ),
 )
 def get_dataset(

@@ -5,7 +5,10 @@ and adaptation) stored as Parquet files in AWS S3. Consumers query datasets thro
 business-oriented parameters (country, period, crop, severity...) without knowing the
 storage layout. Responses are JSON by default and CSV on request.
 
-Built with **Python 3.10**, **FastAPI**, **DuckDB** and **uv**.
+Tabular datasets (Parquet) are queried with DuckDB; raster datasets (GeoTIFF) are
+clipped, reprojected, resampled, converted and aggregated with rasterio/GDAL.
+
+Built with **Python 3.10**, **FastAPI**, **DuckDB**, **rasterio** and **uv**.
 
 ## Architecture
 
@@ -15,7 +18,7 @@ The code follows a hexagonal (ports and adapters) architecture:
 |-------|---------|----------------|
 | Domain | `adaptation_atlas_api.domain` | Dataset models, validation rules, use cases. No framework or storage dependency. |
 | Ports | `adaptation_atlas_api.ports` | Abstract interfaces the domain depends on (catalog, storage, tabular reader, partition index, exporter). |
-| Adapters | `adaptation_atlas_api.adapters` | Concrete implementations: YAML catalog, S3/local storage, DuckDB reader, CSV exporter, plugin registry. |
+| Adapters | `adaptation_atlas_api.adapters` | Concrete implementations: YAML catalog, S3/local storage, DuckDB reader, rasterio reader, CSV/GeoTIFF/NetCDF exporters, plugin registry. |
 | API | `adaptation_atlas_api.api` | FastAPI routers, request/response schemas, error handling, dependency injection. |
 | Infrastructure | `adaptation_atlas_api.infrastructure` | Settings (`.env`) and logging. |
 
@@ -25,16 +28,23 @@ enforced with `import-linter`.
 ### Dataset catalog
 
 Every published dataset is described by one YAML file under `catalog/<domain>/`. The file
-declares the storage path template (with Hive partition placeholders, also usable inside
-file names such as `{country}_seasonal-phenology.parquet`), the accepted filters with their
-controlled vocabularies, the fields returned in every record (or none, to return every
-source column) and the sort order used for stable pagination. Adding a dataset means adding
-a YAML file, not code: every tabular dataset is served by the same generic endpoint.
+declares its kind (`type: tabular` or `type: raster`), the storage path template (with Hive
+partition placeholders, also usable inside file names such as
+`{country}_seasonal-phenology.parquet`) and the accepted filters with their controlled
+vocabularies. Tabular datasets add the fields returned in every record (or none, to return
+every source column) and the sort order used for stable pagination; raster datasets add a
+`raster:` block with the CRS, resolution, coverage, temporal resolution, how layer dates are
+read from file names and band descriptions (`time_axis`), the variables with their units,
+aggregation rules (`sum`, `mean`, `min`, `max`) and registered unit conversions, and the
+transformations clients may request. Adding a dataset means adding a YAML file, not code:
+every tabular dataset is served by the same records endpoint and every raster dataset by the
+same raster endpoint.
 
 To inspect a new dataset before registering it (schema, row count, distinct values):
 
 ```bash
 uv run python scripts/inspect_dataset.py "domain=climate/type=observational/" --output inspection.json
+uv run python scripts/inspect_raster.py "domain=climate/type=hazard-indices/" --output raster_inspection.json
 ```
 
 ## Requirements
@@ -66,6 +76,7 @@ All settings are read from `.env` (see `.env.example` for the full list):
 | `DUCKDB_MEMORY_LIMIT`, `DUCKDB_THREADS`, `QUERY_TIMEOUT_SECONDS` | Query engine limits. |
 | `MAX_SKIPPED_FILES` | Unreadable (corrupt or truncated) source files a single query may skip; `0` makes any unreadable file fail the query with 503. |
 | `MAX_ROWS_PER_RESPONSE`, `DEFAULT_PAGE_SIZE` | Pagination limits. |
+| `RASTER_MAX_PIXELS`, `RASTER_MAX_LAYERS`, `RASTER_MAX_POINTS` | Limits of one raster request (cells read or produced, time steps, sampled coordinates). |
 
 ## Running
 
@@ -81,16 +92,20 @@ Interactive documentation: <http://localhost:8000/docs> (Swagger UI) and
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/health` | Service status. |
-| GET | `/api/v1/datasets?domain=` | List published datasets, optionally by domain. |
-| GET | `/api/v1/datasets/{dataset_id}` | Filters, valid values, fields and available partition combinations. |
+| GET | `/api/v1/datasets?domain=&type=` | List published datasets, optionally by domain and kind (`tabular` / `raster`). |
+| GET | `/api/v1/datasets/{dataset_id}` | Filters, valid values, fields (tabular) or raster description and example request (raster), plus available partition combinations. |
 | GET | `/api/v1/datasets/{dataset_id}/records` | Records of any tabular dataset (HU-001 hazard exposure and all others). |
+| POST | `/api/v1/datasets/{dataset_id}/raster` | Spatial subset of any raster dataset (HU-003 scenarios, HU-004 observed climate). |
+
+Calling the records endpoint on a raster dataset (or the raster endpoint on a tabular one)
+returns `422 wrong_dataset_type` naming the right endpoint.
 
 ### Registered datasets
 
 | Domain | Dataset ids |
 |--------|-------------|
 | hazard_exposure | `hazard_exposure` |
-| climate | `climate_observed_admin`, `climate_hazard_change`, `climate_season_ensemble` |
+| climate | `climate_observed_admin`, `climate_hazard_change`, `climate_season_ensemble`, **raster:** `climate_observed_monthly`, `climate_hazard_indices` |
 | exposure | `exposure_crop_livestock`, `exposure_population_worldpop`, `exposure_population_kenya_census`, `exposure_population_kenya_projections`, `exposure_kenya_flood_intersect` |
 | impacts | `impacts_pest_disease`, `impacts_gyga_yield` |
 | phenology | `phenology_seasonal` |
@@ -151,6 +166,61 @@ Error responses share one schema:
 | 404 | Unknown dataset identifier. |
 | 422 | Unsupported parameter, missing required parameter or value outside the vocabulary. |
 | 503 | Source data unavailable (storage failure); internal paths are never exposed. |
+
+### Raster datasets (HU-003 and HU-004)
+
+Both user stories are served by one pipeline: resolve the layers of the series, clip or
+sample them, reproject/resample, convert units and aggregate over time. Every step is
+optional and driven by the request and the catalog entry, so observed series
+(`climate_observed_monthly`, monthly GeoTIFFs) and scenario indices
+(`climate_hazard_indices`, yearly GeoTIFFs with one band per month) share every function.
+
+```bash
+# Kenya, monthly precipitation of 2020 as a 12-band GeoTIFF in inches, UTM 37S at 10 km
+curl -X POST "http://localhost:8000/api/v1/datasets/climate_observed_monthly/raster" \
+     -H "Content-Type: application/json" -o kenya_ptot_2020.tif -D headers.txt \
+     -d '{"filters":{"variable":"PTOT"},"start_date":"2020-01-01","end_date":"2020-12-31",
+          "bbox":[33.9,-4.7,41.9,5.5],"unit":"in","target_crs":"EPSG:32737","resolution":10000,
+          "resampling":"average","aggregation":{"type":"calendar_month"},"format":"geotiff"}'
+
+# Crop-season precipitation at two points (planting 15 March, 120 days) as JSON
+curl -X POST "http://localhost:8000/api/v1/datasets/climate_observed_monthly/raster" \
+     -H "Content-Type: application/json" \
+     -d '{"filters":{"variable":"PTOT"},"start_date":"2020-03-01","end_date":"2020-07-31",
+          "points":[[36.82,-1.29],[35.28,0.51]],
+          "aggregation":{"type":"crop_season","planting_date":"2020-03-15","duration_days":120},
+          "format":"json"}'
+
+# Mean number of dry days per month over 2041-2060 (SSP2-4.5, MPI-ESM1-2-HR) as NetCDF
+curl -X POST "http://localhost:8000/api/v1/datasets/climate_hazard_indices/raster" \
+     -H "Content-Type: application/json" -o ndd_ssp245.nc \
+     -d '{"filters":{"scenario":"ssp245","period":"2041-2060","model":"MPI-ESM1-2-HR","variable":"ndd"},
+          "geometry":{"type":"Polygon","coordinates":[[[36,-2],[38,-2],[38,0],[36,0],[36,-2]]]},
+          "aggregation":{"type":"period"},"format":"netcdf"}'
+```
+
+* Geographic selection: exactly one of `geometry` (GeoJSON Polygon/MultiPolygon, WGS84),
+  `bbox` (`[min_lon, min_lat, max_lon, max_lat]`) or `points` (`[[lon, lat], ...]`).
+* Period: `start_date`/`end_date` (required for observed series; optional for scenarios,
+  whose projected period is a filter).
+* Aggregation: `none`, `period`, `calendar_month`, `fixed_window` (`start_date`,
+  `window_days`), `crop_season` (`planting_date` plus `end_date` or `duration_days`) or
+  `stages` (`windows: [{label, start, end}]`). The rule (`sum`/`mean`/`min`/`max`) comes
+  from the variable's catalog entry. Windows that do not align with the source time steps
+  (e.g. a 30-day window over monthly data) are prorated by overlapping days, and every
+  output slice reports the fraction of its window covered by data (`coverage`).
+* Units: only conversions registered in the catalog (`factor`/`offset`) are accepted.
+* Output: `geotiff` (one band per slice, metadata in tags) or `netcdf` (`(time, y, x)`)
+  for areas, `json` or `csv` (one row per point and slice) for points. The processing
+  metadata (source layers, selection, grid, every transformation) is returned in the
+  `X-Atlas-Metadata` header as JSON.
+* Validation errors (422): `invalid_geometry`, `invalid_bbox`, `invalid_coordinates`,
+  `invalid_date_range`, `period_outside_coverage`, `unsupported_combination`,
+  `unsupported_crs`, `unsupported_resolution`, `unsupported_resampling`,
+  `unsupported_unit`, `unsupported_aggregation`, `no_coverage`, `request_too_large`.
+
+The units and aggregation rules of `climate_hazard_indices` were inferred from the index
+names and must be confirmed by the data team before release.
 
 ### Partial responses (corrupt source files)
 

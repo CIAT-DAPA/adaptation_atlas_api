@@ -10,12 +10,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from adaptation_atlas_api.adapters.catalog.yaml_catalog import YamlCatalogRepository
+from adaptation_atlas_api.adapters.raster.rasterio_reader import RasterioRasterReader
 from adaptation_atlas_api.adapters.storage.local_storage import LocalStorage
 from adaptation_atlas_api.adapters.tabular.duckdb_reader import DuckDBTabularReader
 from adaptation_atlas_api.domain.models.dataset import DatasetDefinition
+from adaptation_atlas_api.domain.services.raster_dataset import RasterDatasetService
 from adaptation_atlas_api.infrastructure.config import Settings
 from adaptation_atlas_api.main import create_app
 from tests.fixtures.synthetic_data import build_storage_tree
+from tests.fixtures.synthetic_rasters import build_raster_tree
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_CATALOG = PROJECT_ROOT / "catalog"
@@ -24,8 +27,9 @@ TEST_CATALOG = Path(__file__).resolve().parent / "fixtures" / "catalog"
 
 @pytest.fixture(scope="session")
 def storage_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Create the synthetic bucket tree once per test session."""
-    return build_storage_tree(tmp_path_factory.mktemp("bucket"))
+    """Create the synthetic bucket tree (Parquet and GeoTIFF) once per test session."""
+    root = build_storage_tree(tmp_path_factory.mktemp("bucket"))
+    return build_raster_tree(root)
 
 
 @pytest.fixture(scope="session")
@@ -68,6 +72,22 @@ def reader(local_storage: LocalStorage) -> DuckDBTabularReader:
 
 
 @pytest.fixture(scope="session")
+def raster_reader(local_storage: LocalStorage) -> RasterioRasterReader:
+    """Raster reader over the synthetic tree."""
+    return RasterioRasterReader(local_storage, max_pixels=2_000_000)
+
+
+@pytest.fixture(scope="session")
+def raster_service(
+    catalog: YamlCatalogRepository, raster_reader: RasterioRasterReader
+) -> RasterDatasetService:
+    """Generic raster service over the synthetic tree."""
+    return RasterDatasetService(
+        catalog, raster_reader, max_pixels=2_000_000, max_layers=100, max_points=50
+    )
+
+
+@pytest.fixture(scope="session")
 def test_settings(storage_root: Path, catalog_path: Path) -> Settings:
     """Settings using the local backend and the synthetic tree."""
     return Settings(
@@ -82,6 +102,9 @@ def test_settings(storage_root: Path, catalog_path: Path) -> Settings:
         duckdb_threads=2,
         max_rows_per_response=500,
         default_page_size=50,
+        raster_max_pixels=2_000_000,
+        raster_max_layers=100,
+        raster_max_points=50,
     )
 
 

@@ -19,7 +19,6 @@ The reader turns a :class:`TabularQuery` into a parameterized SQL statement:
 from __future__ import annotations
 
 import datetime as dt
-import itertools
 import logging
 import math
 import threading
@@ -33,11 +32,7 @@ from adaptation_atlas_api.domain.exceptions import (
     QueryExecutionError,
     SourceUnavailableError,
 )
-from adaptation_atlas_api.domain.models.dataset import (
-    DatasetDefinition,
-    FieldType,
-    extract_placeholders,
-)
+from adaptation_atlas_api.domain.models.dataset import DatasetDefinition, FieldType
 from adaptation_atlas_api.domain.models.query import (
     DerivedCondition,
     Predicate,
@@ -45,6 +40,7 @@ from adaptation_atlas_api.domain.models.query import (
     TabularQuery,
 )
 from adaptation_atlas_api.domain.models.results import TabularResult
+from adaptation_atlas_api.domain.services.storage_paths import render_storage_paths
 from adaptation_atlas_api.ports.storage import Storage
 from adaptation_atlas_api.ports.tabular_reader import TabularReader
 
@@ -329,45 +325,16 @@ class DuckDBTabularReader(TabularReader):
         when the partition is not filtered) and the ``{file}`` placeholder by the glob of
         each selected file pattern, producing one path per combination.
 
+        The rendering itself is shared with every other reader through
+        :func:`render_storage_paths`.
+
         Args:
             query: The validated query.
 
         Returns:
             Distinct paths (or globs) relative to the storage root, in a stable order.
         """
-        dataset = query.dataset
-        storage = dataset.storage
-        filters = query.filters
-        placeholders = [name for name in dataset.template_placeholders() if name != "file"]
-        file_globs = [storage.file_patterns[key] for key in filters.file_pattern_keys]
-
-        # Placeholders used inside file patterns also need their values.
-        for file_glob in file_globs:
-            for placeholder in extract_placeholders(file_glob):
-                # Keep a stable order without duplicating template placeholders.
-                if placeholder not in placeholders:
-                    placeholders.append(placeholder)
-
-        # Every partition contributes its requested values, or a single wildcard.
-        choices = [filters.partition_values.get(name, ["*"]) for name in placeholders]
-        paths: list[str] = []
-
-        # Build one path per file glob and per combination of partition values.
-        for file_glob in file_globs:
-            for combination in itertools.product(*choices):
-                values = dict(zip(placeholders, combination, strict=True))
-                rendered_glob = file_glob
-                # Substitute the placeholders embedded in the file name first.
-                for placeholder, value in values.items():
-                    rendered_glob = rendered_glob.replace("{" + placeholder + "}", value)
-                path = storage.path_template.replace("{file}", rendered_glob)
-                # Then substitute the folder placeholders of the template.
-                for placeholder, value in values.items():
-                    path = path.replace("{" + placeholder + "}", value)
-                # Identical paths can arise when a pattern ignores a placeholder.
-                if path not in paths:
-                    paths.append(path)
-        return paths
+        return render_storage_paths(query.dataset, query.filters)
 
     # ------------------------------------------------------------------ #
     # SQL construction

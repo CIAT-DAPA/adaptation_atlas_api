@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import quote
 
-from adaptation_atlas_api.domain.exceptions import DatasetNotFoundError
-from adaptation_atlas_api.domain.models.dataset import DatasetDefinition
+from adaptation_atlas_api.domain.exceptions import DatasetNotFoundError, InvalidFilterValueError
+from adaptation_atlas_api.domain.models.dataset import DatasetDefinition, DatasetType
 from adaptation_atlas_api.ports.catalog_repository import CatalogRepository
 from adaptation_atlas_api.ports.partition_index import PartitionIndex
 
@@ -22,8 +23,10 @@ class DatasetAvailability:
         dataset: The registered definition.
         available_partition_values: Partition key -> values found in storage.
         available_combinations: Existing combinations of partition values.
-        example_query: Relative URL of a valid records query for the dataset.
+        example_query: Relative URL of a valid records query (tabular datasets) or of the
+            raster endpoint (raster datasets).
         example_filters: The same required filters as a JSON-ready object.
+        example_request: Example request body for raster datasets (empty for tabular).
     """
 
     dataset: DatasetDefinition
@@ -31,6 +34,7 @@ class DatasetAvailability:
     available_combinations: list[dict[str, str]] = field(default_factory=list)
     example_query: str = ""
     example_filters: dict[str, str] = field(default_factory=dict)
+    example_request: dict[str, Any] = field(default_factory=dict)
 
 
 def build_example_filters(dataset: DatasetDefinition) -> dict[str, str]:
@@ -61,7 +65,11 @@ def build_example_filters(dataset: DatasetDefinition) -> dict[str, str]:
 
 
 def build_example_query(dataset: DatasetDefinition, api_prefix: str = "/api/v1") -> str:
-    """Build a copy-ready records URL using the required filters of ``dataset``.
+    """Build a copy-ready URL for the endpoint that serves ``dataset``.
+
+    Tabular datasets get a records URL with their required filters; raster datasets get
+    the URL of the raster endpoint (its parameters travel in the request body, see
+    :func:`build_example_request`).
 
     Args:
         dataset: Dataset to build the example for.
@@ -70,12 +78,51 @@ def build_example_query(dataset: DatasetDefinition, api_prefix: str = "/api/v1")
     Returns:
         A relative URL such as ``/api/v1/datasets/x/records?country=KEN&period=historic``.
     """
+    # Raster datasets are queried with POST, so the example is the endpoint itself.
+    if dataset.is_raster:
+        return f"{api_prefix}/datasets/{dataset.id}/raster"
     pairs = [
         f"{name}={quote(value, safe='')}" for name, value in build_example_filters(dataset).items()
     ]
     query = "&".join(pairs)
     url = f"{api_prefix}/datasets/{dataset.id}/records"
     return f"{url}?{query}" if query else url
+
+
+def build_example_request(dataset: DatasetDefinition) -> dict[str, Any]:
+    """Build an example body for ``POST /datasets/{id}/raster``.
+
+    Args:
+        dataset: Raster dataset to build the example for.
+
+    Returns:
+        A JSON-ready request with the required filters, a small bounding box inside the
+        coverage, a one-year period and a calendar-month aggregation.
+    """
+    raster = dataset.raster
+    # Tabular datasets have no raster request.
+    if raster is None:
+        return {}
+    coverage = raster.coverage or [-180.0, -90.0, 180.0, 90.0]
+    centre_x = (coverage[0] + coverage[2]) / 2
+    centre_y = (coverage[1] + coverage[3]) / 2
+    half = max(raster.resolution * 10, 0.5)
+    example: dict[str, Any] = {
+        "filters": build_example_filters(dataset),
+        "bbox": [
+            round(centre_x - half, 3),
+            round(centre_y - half, 3),
+            round(centre_x + half, 3),
+            round(centre_y + half, 3),
+        ],
+        "format": "geotiff",
+    }
+    # Datasets with a time range need a period; one year is a reasonable example.
+    if raster.time_range_required:
+        example["start_date"] = "2020-01-01"
+        example["end_date"] = "2020-12-31"
+        example["aggregation"] = {"type": "calendar_month"}
+    return example
 
 
 class CatalogService:
@@ -98,22 +145,39 @@ class CatalogService:
         self._partition_index = partition_index
         self._api_prefix = api_prefix
 
-    def list_datasets(self, domain: str | None = None) -> list[DatasetDefinition]:
-        """Return the registered datasets, optionally restricted to one domain.
+    def list_datasets(
+        self, domain: str | None = None, dataset_type: str | None = None
+    ) -> list[DatasetDefinition]:
+        """Return the registered datasets, optionally restricted by domain and type.
 
         Args:
             domain: Thematic domain to filter by (case insensitive), or ``None``.
+            dataset_type: ``tabular`` or ``raster`` to keep one kind, or ``None``.
 
         Returns:
             Dataset definitions sorted by identifier.
+
+        Raises:
+            InvalidFilterValueError: If ``dataset_type`` is not a known kind.
         """
         datasets = self._catalog.list_all()
 
-        # Without a domain filter the whole catalog is returned.
-        if domain is None or not domain.strip():
-            return datasets
-        wanted = domain.strip().lower()
-        return [dataset for dataset in datasets if dataset.domain.lower() == wanted]
+        # The domain filter keeps datasets of one thematic domain.
+        if domain is not None and domain.strip():
+            wanted = domain.strip().lower()
+            datasets = [dataset for dataset in datasets if dataset.domain.lower() == wanted]
+        # The type filter keeps tabular or raster datasets only.
+        if dataset_type is not None and dataset_type.strip():
+            normalized = dataset_type.strip().lower()
+            # Unknown kinds are a client error listing the valid ones.
+            if normalized not in {item.value for item in DatasetType}:
+                raise InvalidFilterValueError(
+                    f"Invalid value '{dataset_type}' for parameter 'type'.",
+                    parameter="type",
+                    allowed_values=[item.value for item in DatasetType],
+                )
+            datasets = [dataset for dataset in datasets if dataset.type.value == normalized]
+        return datasets
 
     def get_dataset(self, dataset_id: str) -> DatasetDefinition:
         """Return the dataset registered under ``dataset_id``.
@@ -155,6 +219,7 @@ class CatalogService:
             dataset=dataset,
             example_query=build_example_query(dataset, self._api_prefix),
             example_filters=build_example_filters(dataset),
+            example_request=build_example_request(dataset),
         )
 
         # Availability is only computed when discovery is enabled and an index is wired.

@@ -10,7 +10,7 @@ def test_health(client: TestClient) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
-    assert payload["datasets"] == 19
+    assert payload["datasets"] == 21
 
 
 def test_list_datasets(client: TestClient) -> None:

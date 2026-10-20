@@ -42,6 +42,10 @@ class Settings(BaseSettings):
             skipping so any unreadable file fails the query.
         max_rows_per_response: Hard cap of rows returned in one response.
         default_page_size: Page size applied when the client does not send ``limit``.
+        raster_max_pixels: Maximum cells (layers x rows x columns) a raster request may
+            read or produce.
+        raster_max_layers: Maximum source layers (time steps) read in one raster request.
+        raster_max_points: Maximum coordinates sampled in one raster request.
     """
 
     model_config = SettingsConfigDict(
@@ -80,6 +84,11 @@ class Settings(BaseSettings):
     max_skipped_files: int = Field(default=5, ge=0)
     max_rows_per_response: int = Field(default=50_000, ge=1)
     default_page_size: int = Field(default=1_000, ge=1)
+
+    # Raster engine
+    raster_max_pixels: int = Field(default=50_000_000, ge=1)
+    raster_max_layers: int = Field(default=600, ge=1)
+    raster_max_points: int = Field(default=1_000, ge=1)
 
     @field_validator("aws_access_key_id", "aws_secret_access_key", "aws_session_token")
     @classmethod

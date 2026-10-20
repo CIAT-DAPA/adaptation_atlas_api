@@ -28,6 +28,19 @@ class Storage(ABC):
             connection: An open DuckDB connection.
         """
 
+    def gdal_options(self) -> dict[str, Any]:
+        """Return the keyword arguments of ``rasterio.Env`` needed to open this storage.
+
+        Raster readers (rasterio/GDAL) take credentials through a session object and
+        other settings as GDAL configuration options; both are passed as keyword
+        arguments of :class:`rasterio.Env`.
+
+        Returns:
+            Keyword arguments for ``rasterio.Env``; empty when nothing is required
+            (local files).
+        """
+        return {}
+
     @abstractmethod
     def list_files(self, prefix: str, suffix: str = "") -> list[str]:
         """List files under a prefix, relative to the storage root.

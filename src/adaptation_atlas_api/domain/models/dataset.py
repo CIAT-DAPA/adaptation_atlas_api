@@ -179,6 +179,200 @@ class FilterDefinition(BaseModel):
         return self.target or self.name
 
 
+class TemporalResolution(str, Enum):
+    """Time step of every layer in a raster dataset."""
+
+    DAILY = "daily"
+    MONTHLY = "monthly"
+    ANNUAL = "annual"
+
+
+class AggregationMethod(str, Enum):
+    """Rule used to combine the layers of a variable over a temporal window."""
+
+    SUM = "sum"
+    MEAN = "mean"
+    MIN = "min"
+    MAX = "max"
+
+
+class UnitConversionDefinition(BaseModel):
+    """A registered linear conversion from the source unit to a target unit.
+
+    ``target = source * factor + offset``. Conversions are never inferred: only the
+    ones declared here are offered to clients.
+
+    Attributes:
+        factor: Multiplicative factor.
+        offset: Additive offset applied after the factor.
+        description: Human readable description of the conversion.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    factor: float = 1.0
+    offset: float = 0.0
+    description: str = ""
+
+
+class VariableDefinition(BaseModel):
+    """Physical meaning of a raster variable and the operations it supports.
+
+    Attributes:
+        unit: Unit of the stored values.
+        aggregation: Rule used to aggregate the variable over time (sum for totals such
+            as precipitation, mean for states such as temperature or indices).
+        description: Human readable description.
+        conversions: Target unit -> conversion applied when a client asks for that unit.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    unit: str
+    aggregation: AggregationMethod = AggregationMethod.MEAN
+    description: str = ""
+    conversions: dict[str, UnitConversionDefinition] = Field(default_factory=dict)
+
+    @property
+    def available_units(self) -> list[str]:
+        """Return the units a client may request for the variable.
+
+        Returns:
+            The source unit followed by every registered conversion target.
+        """
+        return [self.unit, *self.conversions]
+
+
+class TimeAxisDefinition(BaseModel):
+    """How the date of every raster layer is recovered from storage.
+
+    Date components (``{year}``, ``{month}``, ``{day}``) may come from the file name,
+    from the band descriptions inside each file, or from both (e.g. yearly files holding
+    one band per month).
+
+    Attributes:
+        file_pattern: File name pattern with placeholders (also partition placeholders
+            such as ``{variable}``); ``None`` when the file name carries no date.
+        band_pattern: Pattern matched against band descriptions; ``None`` for single
+            band files.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    file_pattern: str | None = None
+    band_pattern: str | None = None
+
+    @property
+    def date_placeholders(self) -> set[str]:
+        """Return the date components provided by the patterns.
+
+        Returns:
+            Subset of ``{"year", "month", "day"}`` found in both patterns.
+        """
+        found: set[str] = set()
+        # Collect the date components from both patterns.
+        for pattern in (self.file_pattern, self.band_pattern):
+            # Missing patterns contribute nothing.
+            if pattern is None:
+                continue
+            found.update(name for name in extract_placeholders(pattern) if name in DATE_PARTS)
+        return found
+
+
+DATE_PARTS = ("year", "month", "day")
+
+# Date components every temporal resolution needs to place a layer in time.
+REQUIRED_DATE_PARTS: dict[TemporalResolution, set[str]] = {
+    TemporalResolution.ANNUAL: {"year"},
+    TemporalResolution.MONTHLY: {"year", "month"},
+    TemporalResolution.DAILY: {"year", "month", "day"},
+}
+
+
+class RasterDefinition(BaseModel):
+    """Spatial and temporal characteristics of a raster dataset.
+
+    Attributes:
+        crs: Coordinate reference system of the source files (e.g. ``EPSG:4326``).
+        resolution: Pixel size of the source files in CRS units.
+        coverage: Geographic extent ``[min_x, min_y, max_x, max_y]`` in the source CRS.
+        temporal_resolution: Time step of every layer.
+        time_axis: How layer dates are recovered from file names and band descriptions.
+        variable_filter: Name of the filter that selects the variable.
+        variables: Variable value -> physical description and supported operations.
+        allowed_crs: Target coordinate reference systems clients may request. ``None``
+            accepts any CRS the engine understands.
+        allowed_resolutions: Target resolutions (in target CRS units) clients may request.
+            ``None`` accepts any positive resolution.
+        resampling_methods: Resampling methods clients may request.
+        default_resampling: Method applied when a resolution or CRS is requested without
+            a method.
+        aggregations: Temporal aggregation types supported by the dataset.
+        time_range_required: Whether ``start_date``/``end_date`` must be supplied.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    crs: str = "EPSG:4326"
+    resolution: float = Field(gt=0)
+    coverage: list[float] | None = None
+    temporal_resolution: TemporalResolution
+    time_axis: TimeAxisDefinition
+    variable_filter: str = "variable"
+    variables: dict[str, VariableDefinition] = Field(default_factory=dict)
+    allowed_crs: list[str] | None = Field(default_factory=lambda: ["EPSG:4326"])
+    allowed_resolutions: list[float] | None = None
+    resampling_methods: list[str] = Field(
+        default_factory=lambda: ["nearest", "bilinear", "cubic", "average"]
+    )
+    default_resampling: str = "bilinear"
+    aggregations: list[str] = Field(
+        default_factory=lambda: [
+            "none",
+            "period",
+            "calendar_month",
+            "fixed_window",
+            "crop_season",
+            "stages",
+        ]
+    )
+    time_range_required: bool = True
+
+    @model_validator(mode="after")
+    def _check_consistency(self) -> RasterDefinition:
+        """Validate the raster definition.
+
+        Returns:
+            The validated definition.
+
+        Raises:
+            ValueError: When the time axis does not provide the components required by
+                the temporal resolution, the default resampling method is not allowed,
+                or the coverage is malformed.
+        """
+        required = REQUIRED_DATE_PARTS[self.temporal_resolution]
+        provided = self.time_axis.date_placeholders
+        # Every date component the resolution needs must come from some pattern.
+        if not required.issubset(provided):
+            raise ValueError(
+                f"time_axis must provide {sorted(required)} for a {self.temporal_resolution.value}"
+                f" dataset, found {sorted(provided)}"
+            )
+        # The default resampling method must be one clients may also request.
+        if self.default_resampling not in self.resampling_methods:
+            raise ValueError(
+                f"default_resampling '{self.default_resampling}' is not in resampling_methods"
+            )
+        # A coverage box needs exactly four ordered coordinates.
+        if self.coverage is not None and (
+            len(self.coverage) != 4
+            or self.coverage[0] >= self.coverage[2]
+            or self.coverage[1] >= self.coverage[3]
+        ):
+            raise ValueError("coverage must be [min_x, min_y, max_x, max_y]")
+        return self
+
+
 class ResponseFieldDefinition(BaseModel):
     """A field included in every record returned for the dataset.
 
@@ -225,6 +419,7 @@ class DatasetDefinition(BaseModel):
             geometry blobs that cannot be serialized to JSON or CSV).
         order_by: Public field names used to sort results so pagination is stable.
         output_formats: Export formats supported by the dataset.
+        raster: Spatial/temporal description, required for raster datasets.
         metadata: Free-form extra metadata (e.g. loaded from sidecar files).
     """
 
@@ -243,6 +438,7 @@ class DatasetDefinition(BaseModel):
     excluded_columns: list[str] = Field(default_factory=list)
     order_by: list[str] = Field(default_factory=list)
     output_formats: list[str] = Field(default_factory=lambda: ["json", "csv"])
+    raster: RasterDefinition | None = None
     metadata: dict[str, object] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -254,11 +450,30 @@ class DatasetDefinition(BaseModel):
 
         Raises:
             ValueError: When a partition filter targets an unknown partition, a file
-                pattern filter targets an unknown pattern, or the path template references
-                an unknown placeholder.
+                pattern filter targets an unknown pattern, the path template references
+                an unknown placeholder, or the raster block is inconsistent with the type.
         """
         partition_names = {partition.name for partition in self.partitions}
         pattern_keys = set(self.storage.file_patterns)
+
+        # Raster datasets need their spatial description; tabular ones must not carry it.
+        if self.type is DatasetType.RASTER and self.raster is None:
+            raise ValueError("a dataset of type 'raster' must declare the 'raster' block")
+        if self.type is DatasetType.TABULAR and self.raster is not None:
+            raise ValueError("a dataset of type 'tabular' cannot declare the 'raster' block")
+        # The variable filter of a raster dataset must exist and only allow known variables.
+        if self.raster is not None:
+            variable_filter = self.get_filter(self.raster.variable_filter)
+            if variable_filter is None:
+                raise ValueError(
+                    f"raster.variable_filter '{self.raster.variable_filter}' is not a filter"
+                )
+            unknown = set(variable_filter.allowed_values or []) - set(self.raster.variables)
+            if unknown or not variable_filter.allowed_values:
+                raise ValueError(
+                    f"filter '{variable_filter.name}' must list only variables declared in "
+                    f"raster.variables; unknown: {sorted(unknown)}"
+                )
 
         # Every filter must point to something that exists in the definition.
         for filter_definition in self.filters:
@@ -316,6 +531,15 @@ class DatasetDefinition(BaseModel):
             Placeholder names in order of appearance, without braces.
         """
         return extract_placeholders(self.storage.path_template)
+
+    @property
+    def is_raster(self) -> bool:
+        """Tell whether the dataset is served by the raster endpoint.
+
+        Returns:
+            ``True`` for raster datasets.
+        """
+        return self.type is DatasetType.RASTER
 
     @property
     def has_explicit_fields(self) -> bool:

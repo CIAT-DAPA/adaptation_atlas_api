@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
+from adaptation_atlas_api.api.schemas.raster import RasterSchema
 from adaptation_atlas_api.domain.models.dataset import (
     DatasetDefinition,
     FilterDefinition,
@@ -126,8 +129,11 @@ class DatasetDetail(DatasetSummary):
             source column as is.
         available_partition_values: Partition values found in storage (when discovery is on).
         available_combinations: Partition combinations found in storage.
-        example_query: Copy-ready records URL using the required filters.
+        example_query: Copy-ready records URL using the required filters (tabular) or the
+            raster endpoint URL (raster).
         example_filters: The required filters as a JSON object for the ``filters`` parameter.
+        example_request: Example body for ``POST /datasets/{dataset_id}/raster`` (raster only).
+        raster: Spatial/temporal description (raster datasets only).
         metadata: Extra metadata, including source metadata sidecars when enabled.
     """
 
@@ -142,6 +148,8 @@ class DatasetDetail(DatasetSummary):
     example_filters: dict[str, str] = Field(
         default_factory=dict, examples=[{"country": "KEN", "period": "historic"}]
     )
+    example_request: dict[str, Any] = Field(default_factory=dict)
+    raster: RasterSchema | None = None
     metadata: dict[str, object] = Field(default_factory=dict)
 
     @classmethod
@@ -168,5 +176,7 @@ class DatasetDetail(DatasetSummary):
             available_combinations=availability.available_combinations,
             example_query=availability.example_query,
             example_filters=availability.example_filters,
+            example_request=availability.example_request,
+            raster=RasterSchema.from_domain(dataset.raster) if dataset.raster else None,
             metadata=dict(dataset.metadata),
         )

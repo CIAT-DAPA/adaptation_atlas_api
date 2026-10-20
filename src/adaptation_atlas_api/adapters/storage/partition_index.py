@@ -102,8 +102,9 @@ class StoragePartitionIndex(PartitionIndex):
         """
         prefix = dataset.storage.static_prefix
         partition_names = {partition.name for partition in dataset.partitions}
-        keys = self._storage.list_files(prefix, suffix=".parquet")
-        logger.info("Partition index for '%s': %d parquet files listed", dataset.id, len(keys))
+        suffix = listing_suffix(dataset)
+        keys = self._storage.list_files(prefix, suffix=suffix)
+        logger.info("Partition index for '%s': %d %s files listed", dataset.id, len(keys), suffix)
 
         combinations: dict[tuple[tuple[str, str], ...], dict[str, str]] = {}
 
@@ -124,8 +125,10 @@ class StoragePartitionIndex(PartitionIndex):
             if match is None:
                 continue
             pattern_key, name_values = match
-            # Partition values embedded in the file name complement the folder ones.
-            values.update(name_values)
+            # Partition values embedded in the file name complement the folder ones; a
+            # value already read from the folder path is authoritative.
+            for name, value in name_values.items():
+                values.setdefault(name, value)
 
             identity = tuple(sorted(values.items()))
             combination = combinations.setdefault(identity, dict(values))
@@ -159,6 +162,27 @@ class StoragePartitionIndex(PartitionIndex):
             if match is not None:
                 return key, {name: value for name, value in match.groupdict().items() if value}
         return None
+
+
+def listing_suffix(dataset: DatasetDefinition) -> str:
+    """Return the file extension (with dot) to list for a dataset.
+
+    The extension is taken from the default file pattern (``*.parquet`` -> ``.parquet``,
+    ``{variable}-*.tif`` -> ``.tif``) so tabular and raster datasets are listed alike.
+
+    Args:
+        dataset: Dataset whose files are listed.
+
+    Returns:
+        The extension including the leading dot, or an empty string when the pattern has
+        no literal extension.
+    """
+    pattern = dataset.storage.file_patterns[dataset.storage.default_file_pattern]
+    _, dot, extension = pattern.rpartition(".")
+    # Only a literal extension (no wildcard or placeholder) can be used as a suffix.
+    if not dot or any(token in extension for token in ("*", "?", "{", "}")):
+        return ""
+    return "." + extension
 
 
 def pattern_to_regex(glob: str) -> re.Pattern[str]:

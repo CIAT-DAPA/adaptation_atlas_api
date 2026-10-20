@@ -7,6 +7,7 @@ from typing import Any
 
 import boto3
 from botocore.config import Config as BotoConfig
+from rasterio.session import AWSSession
 
 from adaptation_atlas_api.ports.storage import Storage
 
@@ -98,6 +99,32 @@ class S3Storage(Storage):
 
         connection.execute(f"CREATE OR REPLACE SECRET atlas_s3 ({', '.join(options)});")
         logger.debug("DuckDB S3 secret configured for bucket '%s'", self._bucket)
+
+    def gdal_options(self) -> dict[str, Any]:
+        """Return the ``rasterio.Env`` arguments giving GDAL access to the bucket.
+
+        rasterio does not accept AWS credentials as plain GDAL options; they travel in an
+        :class:`rasterio.session.AWSSession`. Without explicit credentials the session
+        falls back to the standard AWS credential chain (environment, profile, role).
+
+        Returns:
+            ``{"session": AWSSession(...)}`` for :class:`rasterio.Env`.
+        """
+        arguments: dict[str, Any] = {"region_name": self._region}
+
+        # Explicit credentials are handed to the session; otherwise boto3 resolves them.
+        if self._access_key_id and self._secret_access_key:
+            arguments["aws_access_key_id"] = self._access_key_id
+            arguments["aws_secret_access_key"] = self._secret_access_key
+            # Temporary credentials also need the session token.
+            if self._session_token:
+                arguments["aws_session_token"] = self._session_token
+        # Custom endpoints (MinIO, LocalStack...) are passed without the scheme.
+        if self._endpoint_url:
+            arguments["endpoint_url"] = self._endpoint_url.replace("https://", "").replace(
+                "http://", ""
+            )
+        return {"session": AWSSession(**arguments)}
 
     def list_files(self, prefix: str, suffix: str = "") -> list[str]:
         """List keys under ``prefix`` using the paginated ``ListObjectsV2`` API.

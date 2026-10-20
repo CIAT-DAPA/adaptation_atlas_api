@@ -1,0 +1,195 @@
+"""Schemas of the raster endpoint and of the raster part of the catalog."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from adaptation_atlas_api.domain.models.dataset import RasterDefinition, VariableDefinition
+
+
+class AggregationRequest(BaseModel):
+    """Temporal aggregation requested for a raster product.
+
+    Attributes:
+        type: ``none`` (source time steps), ``period`` (one value for the whole period),
+            ``calendar_month``, ``fixed_window`` (consecutive windows of ``window_days``
+            from ``start_date``), ``crop_season`` (from ``planting_date`` to ``end_date``
+            or ``planting_date + duration_days``) or ``stages`` (explicit ``windows``).
+        start_date: First day of the first fixed window (defaults to the period start).
+        end_date: Last day of the fixed windows or of the crop season.
+        window_days: Length of every fixed window in days (default 30).
+        planting_date: Crop establishment date for ``crop_season``.
+        duration_days: Season length used when ``end_date`` is omitted.
+        windows: Explicit stages ``{label, start, end}`` for ``stages``.
+    """
+
+    type: str = Field(default="none", examples=["calendar_month"])
+    start_date: str | None = None
+    end_date: str | None = None
+    window_days: int | None = Field(default=None, ge=1)
+    planting_date: str | None = None
+    duration_days: int | None = Field(default=None, ge=1)
+    windows: list[dict[str, str]] | None = None
+
+
+class RasterRequest(BaseModel):
+    """Body of ``POST /datasets/{dataset_id}/raster``.
+
+    Exactly one of ``geometry``, ``bbox`` or ``points`` selects the area. Area selections
+    return a spatial file (``geotiff`` or ``netcdf``); point selections return a table
+    (``json`` or ``csv``).
+
+    Attributes:
+        filters: Dataset filters (see ``GET /datasets/{dataset_id}``); the variable filter
+            is always required.
+        start_date: First day of the requested period (``YYYY-MM-DD``).
+        end_date: Last day of the requested period (``YYYY-MM-DD``).
+        geometry: GeoJSON Polygon or MultiPolygon in WGS84 (a Feature is accepted).
+        bbox: ``[min_lon, min_lat, max_lon, max_lat]`` in WGS84.
+        points: ``[[lon, lat], ...]`` in WGS84.
+        target_crs: Target coordinate reference system (e.g. ``EPSG:3857``).
+        resolution: Target pixel size in target CRS units.
+        resampling: Resampling method (``nearest``, ``bilinear``, ``cubic``, ``average``).
+        unit: Target unit; only registered conversions are accepted.
+        aggregation: Temporal aggregation.
+        format: ``geotiff``, ``netcdf``, ``json`` or ``csv``.
+    """
+
+    filters: dict[str, str | list[str]] = Field(
+        default_factory=dict, examples=[{"variable": "PTOT"}]
+    )
+    start_date: str | None = Field(default=None, examples=["2020-01-01"])
+    end_date: str | None = Field(default=None, examples=["2020-12-31"])
+    geometry: dict[str, Any] | None = None
+    bbox: list[float] | None = Field(default=None, examples=[[36.5, -1.5, 37.5, -0.5]])
+    points: list[list[float]] | None = None
+    target_crs: str | None = None
+    resolution: float | None = None
+    resampling: str | None = None
+    unit: str | None = None
+    aggregation: AggregationRequest | None = None
+    format: str = Field(default="geotiff", examples=["geotiff"])
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "filters": {"variable": "PTOT"},
+                    "start_date": "2020-01-01",
+                    "end_date": "2020-12-31",
+                    "bbox": [36.5, -1.5, 37.5, -0.5],
+                    "aggregation": {"type": "calendar_month"},
+                    "format": "geotiff",
+                },
+                {
+                    "filters": {"variable": "PTOT"},
+                    "start_date": "2020-03-15",
+                    "end_date": "2020-07-31",
+                    "points": [[36.82, -1.29], [35.28, 0.51]],
+                    "aggregation": {
+                        "type": "crop_season",
+                        "planting_date": "2020-03-15",
+                        "duration_days": 120,
+                    },
+                    "unit": "in",
+                    "format": "json",
+                },
+            ]
+        }
+    }
+
+
+class VariableSchema(BaseModel):
+    """Public description of a raster variable.
+
+    Attributes:
+        name: Variable value used in the variable filter.
+        unit: Unit of the stored values.
+        available_units: Units a client may request (source unit plus conversions).
+        aggregation: Rule applied when aggregating over time.
+        description: Meaning of the variable.
+    """
+
+    name: str
+    unit: str
+    available_units: list[str]
+    aggregation: str
+    description: str = ""
+
+    @classmethod
+    def from_domain(cls, name: str, definition: VariableDefinition) -> VariableSchema:
+        """Build the schema from a domain variable definition.
+
+        Args:
+            name: Variable value.
+            definition: Domain object.
+
+        Returns:
+            The public representation.
+        """
+        return cls(
+            name=name,
+            unit=definition.unit,
+            available_units=definition.available_units,
+            aggregation=definition.aggregation.value,
+            description=definition.description,
+        )
+
+
+class RasterSchema(BaseModel):
+    """Public spatial/temporal description of a raster dataset.
+
+    Attributes:
+        crs: Coordinate reference system of the source.
+        resolution: Source pixel size in CRS units.
+        coverage: Source extent ``[min_x, min_y, max_x, max_y]``.
+        temporal_resolution: Time step of the source layers.
+        time_range_required: Whether ``start_date``/``end_date`` are mandatory.
+        variables: Variables with their units and aggregation rules.
+        allowed_crs: Target CRS clients may request (``null`` means any).
+        allowed_resolutions: Target resolutions clients may request (``null`` means any).
+        resampling_methods: Resampling methods clients may request.
+        default_resampling: Method applied when none is requested.
+        aggregations: Temporal aggregation types supported.
+    """
+
+    crs: str
+    resolution: float
+    coverage: list[float] | None = None
+    temporal_resolution: str
+    time_range_required: bool
+    variables: list[VariableSchema]
+    allowed_crs: list[str] | None = None
+    allowed_resolutions: list[float] | None = None
+    resampling_methods: list[str]
+    default_resampling: str
+    aggregations: list[str]
+
+    @classmethod
+    def from_domain(cls, raster: RasterDefinition) -> RasterSchema:
+        """Build the schema from a domain raster definition.
+
+        Args:
+            raster: Domain object.
+
+        Returns:
+            The public representation.
+        """
+        return cls(
+            crs=raster.crs,
+            resolution=raster.resolution,
+            coverage=raster.coverage,
+            temporal_resolution=raster.temporal_resolution.value,
+            time_range_required=raster.time_range_required,
+            variables=[
+                VariableSchema.from_domain(name, definition)
+                for name, definition in raster.variables.items()
+            ],
+            allowed_crs=raster.allowed_crs,
+            allowed_resolutions=raster.allowed_resolutions,
+            resampling_methods=list(raster.resampling_methods),
+            default_resampling=raster.default_resampling,
+            aggregations=list(raster.aggregations),
+        )

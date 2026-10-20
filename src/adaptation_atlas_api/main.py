@@ -33,17 +33,25 @@ OPENAPI_TAGS = [
         "name": "Records",
         "description": (
             "Query records of any tabular dataset by its identifier; filters are defined per "
-            "dataset in the catalog."
+            "dataset in the catalog (HU-001 hazard exposure, climate, exposure, impacts...)."
+        ),
+    },
+    {
+        "name": "Raster",
+        "description": (
+            "Clip, reproject, resample, convert and aggregate any raster dataset by its "
+            "identifier (HU-003 climate change scenarios, HU-004 observed climate)."
         ),
     },
 ]
 
 API_DESCRIPTION = """
 The **Adaptation Atlas API** gives standardized access to prioritized climate, hazard and
-exposure datasets produced by the Adaptation Atlas.
+exposure datasets produced by the Adaptation Atlas and stored in AWS S3.
 
 Consumers query datasets through business-oriented parameters (country, period, crop,
-severity...). Responses are JSON by default and CSV on request.
+severity...) without knowing the storage layout. Responses are JSON by default and CSV on
+request.
 """
 
 
@@ -88,7 +96,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=resolved_settings.cors_origin_list,
         allow_credentials=False,
-        allow_methods=["GET"],
+        allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )
     register_exception_handlers(app)

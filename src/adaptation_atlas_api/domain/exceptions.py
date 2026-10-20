@@ -89,6 +89,90 @@ class InvalidPaginationError(DomainError):
     code = "invalid_pagination"
 
 
+class WrongDatasetTypeError(DomainError):
+    """The dataset exists but is served by another endpoint (tabular vs raster)."""
+
+    code = "wrong_dataset_type"
+
+
+class InvalidGeometryError(DomainError):
+    """The supplied spatial feature is malformed, empty or invalid."""
+
+    code = "invalid_geometry"
+
+
+class InvalidBoundingBoxError(DomainError):
+    """The supplied bounding box is missing values, reversed or out of range."""
+
+    code = "invalid_bbox"
+
+
+class InvalidCoordinatesError(DomainError):
+    """A supplied coordinate is outside the accepted geographic ranges."""
+
+    code = "invalid_coordinates"
+
+
+class NoCoverageError(DomainError):
+    """The geographic selection does not intersect the dataset coverage."""
+
+    code = "no_coverage"
+
+
+class InvalidDateRangeError(DomainError):
+    """The supplied dates are malformed or the start is after the end."""
+
+    code = "invalid_date_range"
+
+
+class PeriodOutsideCoverageError(DomainError):
+    """No layer of the dataset falls inside the requested period."""
+
+    code = "period_outside_coverage"
+
+
+class UnsupportedCombinationError(DomainError):
+    """The combination of filter values does not exist in storage."""
+
+    code = "unsupported_combination"
+
+
+class UnsupportedCrsError(DomainError):
+    """The requested target coordinate reference system is not supported."""
+
+    code = "unsupported_crs"
+
+
+class UnsupportedResolutionError(DomainError):
+    """The requested target resolution is not permitted for the dataset."""
+
+    code = "unsupported_resolution"
+
+
+class UnsupportedResamplingError(DomainError):
+    """The requested resampling method is not supported."""
+
+    code = "unsupported_resampling"
+
+
+class UnsupportedUnitError(DomainError):
+    """No conversion rule is registered for the requested target unit."""
+
+    code = "unsupported_unit"
+
+
+class UnsupportedAggregationError(DomainError):
+    """The requested temporal aggregation is unknown, unsupported or incomplete."""
+
+    code = "unsupported_aggregation"
+
+
+class RequestTooLargeError(DomainError):
+    """The request would read or produce more data than the service allows."""
+
+    code = "request_too_large"
+
+
 class SourceUnavailableError(DomainError):
     """The registered source asset cannot be read (storage failure)."""
 

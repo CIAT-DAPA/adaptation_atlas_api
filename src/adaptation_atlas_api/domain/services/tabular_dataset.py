@@ -13,6 +13,7 @@ from adaptation_atlas_api.domain.exceptions import (
     DatasetNotFoundError,
     InvalidPaginationError,
     UnsupportedFormatError,
+    WrongDatasetTypeError,
 )
 from adaptation_atlas_api.domain.models.dataset import DatasetDefinition, DatasetType
 from adaptation_atlas_api.domain.models.query import OutputFormat, TabularQuery
@@ -66,18 +67,26 @@ class TabularDatasetService:
             The dataset definition.
 
         Raises:
-            DatasetNotFoundError: If the identifier is unknown or not a tabular dataset.
+            DatasetNotFoundError: If the identifier is unknown.
+            WrongDatasetTypeError: If the dataset is a raster (served by ``/raster``).
         """
         dataset = self._catalog.get(dataset_id)
+        tabular_ids = [
+            item.id for item in self._catalog.list_all() if item.type is DatasetType.TABULAR
+        ]
 
-        # Unknown identifiers and non-tabular datasets are both reported as not found,
-        # listing only the tabular datasets this endpoint can serve.
-        if dataset is None or dataset.type is not DatasetType.TABULAR:
-            tabular_ids = [
-                item.id for item in self._catalog.list_all() if item.type is DatasetType.TABULAR
-            ]
+        # Unknown identifiers list the tabular datasets this endpoint can serve.
+        if dataset is None:
             raise DatasetNotFoundError(
                 f"Dataset '{dataset_id}' is not a registered tabular dataset.",
+                parameter="dataset_id",
+                allowed_values=tabular_ids,
+            )
+        # Raster datasets exist but belong to the raster endpoint.
+        if dataset.type is not DatasetType.TABULAR:
+            raise WrongDatasetTypeError(
+                f"Dataset '{dataset_id}' is a raster dataset; use "
+                f"POST /datasets/{dataset_id}/raster.",
                 parameter="dataset_id",
                 allowed_values=tabular_ids,
             )
