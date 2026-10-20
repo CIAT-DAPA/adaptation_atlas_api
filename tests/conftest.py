@@ -9,14 +9,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from adaptation_atlas_api.adapters.catalog.yaml_catalog import YamlCatalogRepository
-from adaptation_atlas_api.adapters.raster.rasterio_reader import RasterioRasterReader
-from adaptation_atlas_api.adapters.storage.local_storage import LocalStorage
-from adaptation_atlas_api.adapters.tabular.duckdb_reader import DuckDBTabularReader
-from adaptation_atlas_api.domain.models.dataset import DatasetDefinition
-from adaptation_atlas_api.domain.services.raster_dataset import RasterDatasetService
-from adaptation_atlas_api.infrastructure.config import Settings
 from adaptation_atlas_api.main import create_app
+from adaptation_atlas_api.raster.application.raster_service import RasterDatasetService
+from adaptation_atlas_api.raster.infrastructure.rasterio_reader import RasterioRasterReader
+from adaptation_atlas_api.records.infrastructure.duckdb_reader import DuckDBTabularReader
+from adaptation_atlas_api.shared.domain.dataset import DatasetDefinition
+from adaptation_atlas_api.shared.infrastructure.config import Settings
+from adaptation_atlas_api.shared.infrastructure.local_storage import LocalStorage
+from adaptation_atlas_api.shared.infrastructure.yaml_catalog import YamlCatalogRepository
 from tests.fixtures.synthetic_data import build_storage_tree
 from tests.fixtures.synthetic_rasters import build_raster_tree
 

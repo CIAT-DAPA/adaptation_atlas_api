@@ -15,11 +15,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from adaptation_atlas_api.api.deps import build_container
-from adaptation_atlas_api.api.errors import register_exception_handlers
-from adaptation_atlas_api.api.v1.router import router as v1_router
-from adaptation_atlas_api.infrastructure.config import Settings, get_settings
-from adaptation_atlas_api.infrastructure.logging import configure_logging
+from adaptation_atlas_api.catalog.api import health as health_routes
+from adaptation_atlas_api.catalog.api import routes as catalog_routes
+from adaptation_atlas_api.container import build_container
+from adaptation_atlas_api.raster.api import routes as raster_routes
+from adaptation_atlas_api.records.api import routes as records_routes
+from adaptation_atlas_api.shared.api.errors import register_exception_handlers
+from adaptation_atlas_api.shared.infrastructure.config import Settings, get_settings
+from adaptation_atlas_api.shared.infrastructure.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +103,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     register_exception_handlers(app)
-    app.include_router(v1_router, prefix=resolved_settings.api_prefix)
+    # Every slice contributes its own router under the versioned prefix.
+    for slice_router in (
+        health_routes.router,
+        catalog_routes.router,
+        records_routes.router,
+        raster_routes.router,
+    ):
+        app.include_router(slice_router, prefix=resolved_settings.api_prefix)
 
     @app.get("/", include_in_schema=False)
     async def root_redirect() -> RedirectResponse:

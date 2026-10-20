@@ -12,18 +12,25 @@ Built with **Python 3.10**, **FastAPI**, **DuckDB**, **rasterio** and **uv**.
 
 ## Architecture
 
-The code follows a hexagonal (ports and adapters) architecture:
+The code is organised in **vertical slices** (one folder per functionality) and, inside
+each slice, follows the **hexagonal** (ports and adapters) rule:
 
-| Layer | Package | Responsibility |
-|-------|---------|----------------|
-| Domain | `adaptation_atlas_api.domain` | Dataset models, validation rules, use cases. No framework or storage dependency. |
-| Ports | `adaptation_atlas_api.ports` | Abstract interfaces the domain depends on (catalog, storage, tabular reader, partition index, exporter). |
-| Adapters | `adaptation_atlas_api.adapters` | Concrete implementations: YAML catalog, S3/local storage, DuckDB reader, rasterio reader, CSV/GeoTIFF/NetCDF exporters, plugin registry. |
-| API | `adaptation_atlas_api.api` | FastAPI routers, request/response schemas, error handling, dependency injection. |
-| Infrastructure | `adaptation_atlas_api.infrastructure` | Settings (`.env`) and logging. |
+| Package | Responsibility |
+|---------|----------------|
+| `adaptation_atlas_api.shared` | Building blocks every slice needs: dataset catalog model and filter validation (`domain`), storage/catalog/partition-index ports (`ports`), settings, logging, S3/local storage, YAML catalog loader, CSV exporter (`infrastructure`), error handling, common schemas and FastAPI dependencies (`api`). |
+| `adaptation_atlas_api.catalog` | Dataset discovery: `GET /datasets`, `GET /datasets/{id}`, `GET /health`. |
+| `adaptation_atlas_api.records` | Tabular records: `GET /datasets/{id}/records` (HU-001, HU-002). DuckDB reader, tabular query model, registry. |
+| `adaptation_atlas_api.raster` | Raster products: `POST /datasets/{id}/raster` (HU-003, HU-004). Spatial/temporal models, windows, unit conversion, rasterio reader, GeoTIFF/NetCDF exporters, registry. |
+| `adaptation_atlas_api.container` | Composition root: builds the shared infrastructure and every slice's services once at startup (the only module that knows all slices). |
+| `adaptation_atlas_api.main` | FastAPI application factory mounting each slice's router. |
 
-The dependency rule (`domain` never imports `adapters`, `api` or `infrastructure`) is
-enforced with `import-linter`.
+Inside a slice the layers are `domain` (models, validation, pure services), `application`
+(use cases), `ports` (abstract interfaces), `infrastructure` (adapters) and `api`
+(routers and schemas). Two rules are enforced with `import-linter`: slices never import
+each other (only `shared`), and within a slice `domain`/`ports` never depend on
+`application`, `infrastructure` or `api`, `application` never on `infrastructure`/`api`,
+and `infrastructure` never on `api`. Tests mirror the layout (`tests/shared`,
+`tests/catalog`, `tests/records`, `tests/raster`).
 
 ### Dataset catalog
 

@@ -35,10 +35,10 @@ import rasterio
 # Allow running the script from the repository root without installing the package.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from adaptation_atlas_api.adapters.storage.local_storage import LocalStorage  # noqa: E402
-from adaptation_atlas_api.adapters.storage.s3_storage import S3Storage  # noqa: E402
-from adaptation_atlas_api.infrastructure.config import get_settings  # noqa: E402
-from adaptation_atlas_api.ports.storage import Storage  # noqa: E402
+from adaptation_atlas_api.shared.infrastructure.config import get_settings  # noqa: E402
+from adaptation_atlas_api.shared.infrastructure.local_storage import LocalStorage  # noqa: E402
+from adaptation_atlas_api.shared.infrastructure.s3_storage import S3Storage  # noqa: E402
+from adaptation_atlas_api.shared.ports.storage import Storage  # noqa: E402
 
 logger = logging.getLogger("inspect_raster")
 
