@@ -1,7 +1,7 @@
 [project]
 name = "adaptation-atlas-api"
 version = "0.1.0"
-description = "REST API exposing Adaptation Atlas climate, hazard and exposure datasets."
+description = "REST API exposing Adaptation Atlas climate, hazard and exposure datasets stored in AWS S3."
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 license = { text = "MIT" }
@@ -16,6 +16,13 @@ dependencies = [
     "pyarrow>=16.0,<20.0",
     "pandas>=2.2,<3.0",
     "boto3>=1.34,<2.0",
+    "numpy>=1.26,<3.0",
+    "rasterio>=1.3,<2.0",
+    "rioxarray>=0.15,<1.0",
+    "xarray>=2024.1",
+    "shapely>=2.0,<3.0",
+    "pyproj>=3.6,<4.0",
+    "netcdf4>=1.6,<2.0",
 ]
 
 [dependency-groups]
@@ -55,7 +62,7 @@ convention = "google"
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["D"]
 # FastAPI declares dependencies and query parameters as call defaults by design.
-"src/adaptation_atlas_api/api/v1/**" = ["B008"]
+"src/adaptation_atlas_api/*/api/**" = ["B008"]
 
 # --------------------------------------------------------------------------- #
 # Mypy: static typing
@@ -75,6 +82,10 @@ warn_unused_ignores = true
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-ra --strict-markers"
+filterwarnings = [
+    # rasterio still multiplies Affine objects with ``*`` internally (affine >= 2.4 warns).
+    "ignore:Use `@` matmul instead of `\\*` mul operator:PendingDeprecationWarning",
+]
 
 # --------------------------------------------------------------------------- #
 # Import linter: enforce the hexagonal dependency rule
@@ -84,28 +95,83 @@ addopts = "-ra --strict-markers"
 [tool.importlinter]
 root_package = "adaptation_atlas_api"
 
+# Vertical slices: catalog, records and raster never import each other; only the
+# composition root (container/main) knows them all.
 [[tool.importlinter.contracts]]
-name = "Domain must not depend on outer layers"
-type = "forbidden"
-source_modules = ["adaptation_atlas_api.domain"]
-forbidden_modules = [
-    "adaptation_atlas_api.adapters",
-    "adaptation_atlas_api.api",
-    "adaptation_atlas_api.infrastructure",
+name = "Slices are independent"
+type = "independence"
+modules = [
+    "adaptation_atlas_api.catalog",
+    "adaptation_atlas_api.records",
+    "adaptation_atlas_api.raster",
 ]
 
 [[tool.importlinter.contracts]]
-name = "Ports only depend on the domain"
+name = "Shared code does not depend on slices or on the composition root"
 type = "forbidden"
-source_modules = ["adaptation_atlas_api.ports"]
+source_modules = ["adaptation_atlas_api.shared"]
 forbidden_modules = [
-    "adaptation_atlas_api.adapters",
-    "adaptation_atlas_api.api",
-    "adaptation_atlas_api.infrastructure",
+    "adaptation_atlas_api.catalog",
+    "adaptation_atlas_api.records",
+    "adaptation_atlas_api.raster",
+    "adaptation_atlas_api.container",
+    "adaptation_atlas_api.main",
+]
+
+# Hexagonal rule inside every slice and in shared: domain and ports never depend on
+# infrastructure or api; application never depends on api; infrastructure never on api.
+[[tool.importlinter.contracts]]
+name = "Domain and ports do not depend on outer layers"
+type = "forbidden"
+source_modules = [
+    "adaptation_atlas_api.shared.domain",
+    "adaptation_atlas_api.shared.ports",
+    "adaptation_atlas_api.records.domain",
+    "adaptation_atlas_api.records.ports",
+    "adaptation_atlas_api.raster.domain",
+    "adaptation_atlas_api.raster.ports",
+]
+forbidden_modules = [
+    "adaptation_atlas_api.shared.infrastructure",
+    "adaptation_atlas_api.shared.api",
+    "adaptation_atlas_api.records.infrastructure",
+    "adaptation_atlas_api.records.api",
+    "adaptation_atlas_api.records.application",
+    "adaptation_atlas_api.raster.infrastructure",
+    "adaptation_atlas_api.raster.api",
+    "adaptation_atlas_api.raster.application",
+    "adaptation_atlas_api.catalog.application",
+    "adaptation_atlas_api.catalog.api",
 ]
 
 [[tool.importlinter.contracts]]
-name = "Adapters must not depend on the API layer"
+name = "Application and infrastructure do not depend on the API layer"
 type = "forbidden"
-source_modules = ["adaptation_atlas_api.adapters"]
-forbidden_modules = ["adaptation_atlas_api.api"]
+source_modules = [
+    "adaptation_atlas_api.catalog.application",
+    "adaptation_atlas_api.records.application",
+    "adaptation_atlas_api.raster.application",
+    "adaptation_atlas_api.shared.infrastructure",
+    "adaptation_atlas_api.records.infrastructure",
+    "adaptation_atlas_api.raster.infrastructure",
+]
+forbidden_modules = [
+    "adaptation_atlas_api.shared.api",
+    "adaptation_atlas_api.catalog.api",
+    "adaptation_atlas_api.records.api",
+    "adaptation_atlas_api.raster.api",
+]
+
+[[tool.importlinter.contracts]]
+name = "Application does not depend on infrastructure"
+type = "forbidden"
+source_modules = [
+    "adaptation_atlas_api.catalog.application",
+    "adaptation_atlas_api.records.application",
+    "adaptation_atlas_api.raster.application",
+]
+forbidden_modules = [
+    "adaptation_atlas_api.shared.infrastructure",
+    "adaptation_atlas_api.records.infrastructure",
+    "adaptation_atlas_api.raster.infrastructure",
+]

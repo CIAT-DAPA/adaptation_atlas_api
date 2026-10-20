@@ -1,0 +1,71 @@
+# Observed monthly climate rasters (HU-004).
+#
+# One GeoTIFF per month and variable (1981-01 onwards), 0.05 degrees over Africa.
+# Served by POST /api/v1/datasets/climate_observed_monthly/raster.
+id: climate_observed_monthly
+name: Observed monthly climate (CHIRPS / CHIRTS / ERA5)
+description: >-
+  Monthly observed precipitation totals and standardized precipitation-evapotranspiration
+  indices (SPEI) over Africa at 0.05 degrees, from CHIRPS, CHIRTS and ERA5. Clip to a
+  polygon, bounding box or points, convert units, reproject/resample and aggregate over
+  calendar months, custom windows, crop seasons or phenological stages.
+domain: climate
+type: raster
+reader: rasterio_geotiff
+
+storage:
+  path_template: domain=climate/type=observational/source=chirps-chirts-era5/region=africa/processing=monthly/variable={variable}/{file}
+  file_patterns:
+    default: "{variable}-*.tif"
+  discover_partitions: true
+
+partitions:
+  - name: variable
+    allowed_values: [PTOT, SPEI-03, SPEI-12]
+    description: Climate variable.
+
+filters:
+  - name: variable
+    source: partition
+    required: true
+    multiple: false
+    allowed_values: [PTOT, SPEI-03, SPEI-12]
+    example: PTOT
+    description: Climate variable (one per request).
+
+output_formats: [geotiff, netcdf, json, csv]
+
+raster:
+  crs: EPSG:4326
+  resolution: 0.05
+  coverage: [-20.0, -40.0, 55.0, 40.0]
+  temporal_resolution: monthly
+  time_range_required: true
+  time_axis:
+    file_pattern: "{variable}-{year}-{month}.tif"
+  variable_filter: variable
+  variables:
+    PTOT:
+      unit: mm
+      aggregation: sum
+      description: Monthly precipitation total (CHIRPS).
+      conversions:
+        in:
+          factor: 0.0393700787
+          description: Millimetres to inches.
+        cm:
+          factor: 0.1
+          description: Millimetres to centimetres.
+    SPEI-03:
+      unit: index
+      aggregation: mean
+      description: 3-month Standardized Precipitation-Evapotranspiration Index.
+    SPEI-12:
+      unit: index
+      aggregation: mean
+      description: 12-month Standardized Precipitation-Evapotranspiration Index.
+  allowed_crs: null            # any CRS understood by GDAL/PROJ (e.g. EPSG:3857, EPSG:32637)
+  allowed_resolutions: null    # any positive resolution in target CRS units
+  resampling_methods: [nearest, bilinear, cubic, average, mode]
+  default_resampling: bilinear
+  aggregations: [none, period, calendar_month, fixed_window, crop_season, stages]
