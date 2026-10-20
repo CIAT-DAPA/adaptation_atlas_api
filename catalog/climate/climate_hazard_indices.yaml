@@ -1,0 +1,156 @@
+# Climate change scenario hazard indices (HU-003).
+#
+# One GeoTIFF per year, model, scenario, projected period and variable, holding twelve
+# bands (one per month, described as "YYYY_MM"), 0.05 degrees. The historic baseline
+# (model=historic, scenario=historic, time=1995-2014) comes from atlas_cmip6 over SSA;
+# the projections from NEX-GDDP-CMIP6 (global).
+# Served by POST /api/v1/datasets/climate_hazard_indices/raster.
+id: climate_hazard_indices
+name: Climate change scenario hazard indices (CMIP6)
+description: >-
+  Monthly climate hazard indices (dry days, water stress days, heat stress, temperature
+  and precipitation) for the historic baseline and SSP scenarios by model and projected
+  period, at 0.05 degrees. Select a scenario, projected period, model and variable, then
+  clip, reproject, resample and aggregate (e.g. the mean of the period).
+domain: climate
+type: raster
+reader: rasterio_geotiff
+
+storage:
+  path_template: domain=climate/type=hazard-indices/source={source}/region={region}/model={model}/scenario={scenario}/time={time}/variable={variable}/processing=analysis-ready/{file}
+  file_patterns:
+    default: "{variable}_{scenario}_*.tif"
+  discover_partitions: true
+
+partitions:
+  - name: source
+    allowed_values: [atlas_cmip6, nex-gddp-cmip6]
+    description: Data source (atlas_cmip6 for the historic baseline, nex-gddp-cmip6 for projections).
+  - name: region
+    allowed_values: [ssa, global]
+    description: Spatial extent of the source files.
+  - name: model
+    allowed_values: [historic, ACCESS-ESM1-5, EC-Earth3, INM-CM5-0, MPI-ESM1-2-HR, MRI-ESM2-0]
+    description: Global climate model.
+  - name: scenario
+    allowed_values: [historic, ssp126, ssp245, ssp370, ssp585]
+    description: Emission scenario.
+  - name: time
+    allowed_values: ["1995-2014", "2021-2040", "2041-2060", "2061-2080", "2081-2100"]
+    description: Projected period (historic baseline is 1995-2014).
+  - name: variable
+    description: Hazard index.
+
+filters:
+  - name: scenario
+    source: partition
+    required: true
+    multiple: false
+    allowed_values: [historic, ssp126, ssp245, ssp370, ssp585]
+    example: ssp245
+    description: Emission scenario; `historic` selects the baseline.
+  - name: period
+    source: partition
+    target: time
+    required: true
+    multiple: false
+    allowed_values: ["1995-2014", "2021-2040", "2041-2060", "2061-2080", "2081-2100"]
+    example: "2041-2060"
+    description: Projected period (use 1995-2014 with scenario=historic).
+  - name: model
+    source: partition
+    required: true
+    multiple: false
+    allowed_values: [historic, ACCESS-ESM1-5, EC-Earth3, INM-CM5-0, MPI-ESM1-2-HR, MRI-ESM2-0]
+    example: MPI-ESM1-2-HR
+    description: Global climate model (use `historic` with scenario=historic).
+  - name: variable
+    source: partition
+    required: true
+    multiple: false
+    allowed_values:
+      [hsh_max, hsh_mean, ndd, ndwl0, ndwl50, ndws, ntx20, ntx21, ntx22, ntx23, ntx24, ntx25,
+       ntx26, ntx27, ntx28, ntx29, ntx30, ntx31, ntx32, ntx33, ntx34, ntx35, ntx36, ntx37,
+       ntx38, ntx39, ntx40, ntx41, ntx42, ntx43, ntx44, ntx45, ntx46, ntx47, ntx48, ntx49,
+       ntx50, ptot, tai, tavg, thi_max, thi_mean, tmax, tmin]
+    example: ndd
+    description: Hazard index (one per request).
+  - name: source
+    source: partition
+    allowed_values: [atlas_cmip6, nex-gddp-cmip6]
+    description: Restrict to one data source (optional; resolved from the other filters).
+  - name: region
+    source: partition
+    allowed_values: [ssa, global]
+    description: Restrict to one source extent (optional; resolved from the other filters).
+
+output_formats: [geotiff, netcdf, json, csv]
+
+raster:
+  crs: EPSG:4326
+  resolution: 0.05
+  coverage: [-25.35, -46.95, 57.8, 40.0]
+  temporal_resolution: monthly
+  time_range_required: false     # the projected period already bounds the series
+  time_axis:
+    file_pattern: "{variable}_{scenario}_{year}.tif"
+    band_pattern: "{year}_{month}"
+  variable_filter: variable
+  # Units and aggregation rules to be confirmed by the data team (see README).
+  variables:
+    ndd:      {unit: days, aggregation: sum, description: Number of dry days.}
+    ndws:     {unit: days, aggregation: sum, description: Number of days with water stress.}
+    ndwl0:    {unit: days, aggregation: sum, description: Number of waterlogging days (threshold 0).}
+    ndwl50:   {unit: days, aggregation: sum, description: Number of waterlogging days (threshold 50).}
+    ptot:     {unit: mm, aggregation: sum, description: Precipitation total.,
+               conversions: {in: {factor: 0.0393700787, description: Millimetres to inches.}}}
+    tavg:     {unit: degC, aggregation: mean, description: Mean temperature.,
+               conversions: {degF: {factor: 1.8, offset: 32.0, description: Celsius to Fahrenheit.},
+                             K: {offset: 273.15, description: Celsius to Kelvin.}}}
+    tmax:     {unit: degC, aggregation: mean, description: Maximum temperature.,
+               conversions: {degF: {factor: 1.8, offset: 32.0, description: Celsius to Fahrenheit.},
+                             K: {offset: 273.15, description: Celsius to Kelvin.}}}
+    tmin:     {unit: degC, aggregation: mean, description: Minimum temperature.,
+               conversions: {degF: {factor: 1.8, offset: 32.0, description: Celsius to Fahrenheit.},
+                             K: {offset: 273.15, description: Celsius to Kelvin.}}}
+    tai:      {unit: index, aggregation: mean, description: Thornthwaite aridity index.}
+    hsh_max:  {unit: index, aggregation: mean, description: Human heat stress (maximum).}
+    hsh_mean: {unit: index, aggregation: mean, description: Human heat stress (mean).}
+    thi_max:  {unit: index, aggregation: mean, description: Temperature-humidity index (maximum).}
+    thi_mean: {unit: index, aggregation: mean, description: Temperature-humidity index (mean).}
+    ntx20: {unit: days, aggregation: sum, description: Days with maximum temperature above 20 C.}
+    ntx21: {unit: days, aggregation: sum, description: Days with maximum temperature above 21 C.}
+    ntx22: {unit: days, aggregation: sum, description: Days with maximum temperature above 22 C.}
+    ntx23: {unit: days, aggregation: sum, description: Days with maximum temperature above 23 C.}
+    ntx24: {unit: days, aggregation: sum, description: Days with maximum temperature above 24 C.}
+    ntx25: {unit: days, aggregation: sum, description: Days with maximum temperature above 25 C.}
+    ntx26: {unit: days, aggregation: sum, description: Days with maximum temperature above 26 C.}
+    ntx27: {unit: days, aggregation: sum, description: Days with maximum temperature above 27 C.}
+    ntx28: {unit: days, aggregation: sum, description: Days with maximum temperature above 28 C.}
+    ntx29: {unit: days, aggregation: sum, description: Days with maximum temperature above 29 C.}
+    ntx30: {unit: days, aggregation: sum, description: Days with maximum temperature above 30 C.}
+    ntx31: {unit: days, aggregation: sum, description: Days with maximum temperature above 31 C.}
+    ntx32: {unit: days, aggregation: sum, description: Days with maximum temperature above 32 C.}
+    ntx33: {unit: days, aggregation: sum, description: Days with maximum temperature above 33 C.}
+    ntx34: {unit: days, aggregation: sum, description: Days with maximum temperature above 34 C.}
+    ntx35: {unit: days, aggregation: sum, description: Days with maximum temperature above 35 C.}
+    ntx36: {unit: days, aggregation: sum, description: Days with maximum temperature above 36 C.}
+    ntx37: {unit: days, aggregation: sum, description: Days with maximum temperature above 37 C.}
+    ntx38: {unit: days, aggregation: sum, description: Days with maximum temperature above 38 C.}
+    ntx39: {unit: days, aggregation: sum, description: Days with maximum temperature above 39 C.}
+    ntx40: {unit: days, aggregation: sum, description: Days with maximum temperature above 40 C.}
+    ntx41: {unit: days, aggregation: sum, description: Days with maximum temperature above 41 C.}
+    ntx42: {unit: days, aggregation: sum, description: Days with maximum temperature above 42 C.}
+    ntx43: {unit: days, aggregation: sum, description: Days with maximum temperature above 43 C.}
+    ntx44: {unit: days, aggregation: sum, description: Days with maximum temperature above 44 C.}
+    ntx45: {unit: days, aggregation: sum, description: Days with maximum temperature above 45 C.}
+    ntx46: {unit: days, aggregation: sum, description: Days with maximum temperature above 46 C.}
+    ntx47: {unit: days, aggregation: sum, description: Days with maximum temperature above 47 C.}
+    ntx48: {unit: days, aggregation: sum, description: Days with maximum temperature above 48 C.}
+    ntx49: {unit: days, aggregation: sum, description: Days with maximum temperature above 49 C.}
+    ntx50: {unit: days, aggregation: sum, description: Days with maximum temperature above 50 C.}
+  allowed_crs: null
+  allowed_resolutions: null
+  resampling_methods: [nearest, bilinear, cubic, average, mode]
+  default_resampling: bilinear
+  aggregations: [none, period, calendar_month, fixed_window, crop_season, stages]
